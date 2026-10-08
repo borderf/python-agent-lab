@@ -1,3 +1,12 @@
+"""
+https://docs.python.org/zh-cn/3.14/tutorial/datastructures.html
+Python中常见的数据结构：
+- list: [1, 2, 3]
+- tuple: ("1", 2, 3.00)
+- set: {"1", "2", "3"}
+- dict: {"name": "haha", "age": 18}
+"""
+
 orders = [
     {
         "id": "10001",
@@ -79,6 +88,25 @@ def remove_duplicate_orders(orders):
     return unique_orders
 
 
+# TODO(Day 1.2): 用集合表示订单 ID，并练习集合操作。
+#   - 从 orders 得到所有唯一订单 ID、已支付订单 ID、非已支付订单 ID。
+#   - 用差集求非已支付订单 ID；判断已支付 ID 是否为所有 ID 的子集。
+#   - 比较原始订单 ID 列表长度与唯一 ID 集合长度，判断数据中是否有重复 ID。
+#   验收：能说清 set 去重后不保留重复次数，也不应用它来依赖原始顺序。
+# 获取订单ID、已支付ID、非已支付ID
+def get_order_ids(orders):
+    """
+    获取订单ID、已支付ID、非已支付ID
+    """
+
+    order_ids = {order["id"] for order in orders}
+    # 已支付ID
+    paid_order_ids = {order["id"] for order in orders if order["status"] == "paid"}
+    # 非已支付ID
+    unpaid_order_ids = order_ids - paid_order_ids
+    return (order_ids, paid_order_ids, unpaid_order_ids)
+
+
 if __name__ == "__main__":
     paid_orders = get_paid_orders(orders)
     print("已支付的订单:")
@@ -103,3 +131,7 @@ if __name__ == "__main__":
     unique_orders = remove_duplicate_orders(orders)
     for order in unique_orders:
         print(order)
+
+    print("获取订单各种ID")
+    order_id_tuple = get_order_ids(orders)
+    print(f"订单ID、已支付订单ID、未支付订单ID：{order_id_tuple}")
