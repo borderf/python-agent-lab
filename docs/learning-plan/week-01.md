@@ -125,6 +125,74 @@ def get_paid_orders(orders: list[Order]) -> list[Order]:
 3. 浮点数的近似表示问题。
 4. 固定两位小数的货币可以用整数分保存；Decimal 是另一种常见表示方式。
 
+### 原理讲解：sum() 如何汇总
+
+`sum(iterable, start=0)` 接收一个可迭代对象，从 `start` 开始，把其中的值逐个相加。`start` 默认是整数 `0`，所以空输入也有确定结果：`sum([]) == 0`。例如：
+
+~~~python
+sum([10, 20, 30])  # 60
+sum([])            # 0
+~~~
+
+这里的 `iterable` 不只可以是列表，也可以是生成器表达式。金额用整数“分”保存时，`sum()` 对整数做累加，结果仍然是整数分。
+
+### 原理讲解：生成器表达式
+
+生成器表达式的一般写法是：
+
+~~~python
+(表达式 for 临时变量 in 可迭代对象 if 条件)
+~~~
+
+它会按需产生值，而不是先把所有结果装进一个新列表。比如：
+
+~~~python
+amounts = (order["amount_cents"] for order in orders)
+~~~
+
+`amounts` 此时不是金额列表，而是一个可以逐项取值的生成器。它通常会在循环或 `sum()` 消费它时才计算下一项；被消费完以后就不能从头再读。生成器表达式和使用 `yield` 定义的生成器函数是两种相关但不同的写法；Day 3 只需掌握表达式。
+
+列表推导式与生成器表达式的区别可以这样看：
+
+~~~python
+amounts_list = [order["amount_cents"] for order in orders]
+total_a = sum(amounts_list)
+
+total_b = sum(order["amount_cents"] for order in orders)
+~~~
+
+两种写法对这份数据会得到相同总额。第一种先创建一份新列表，再求和；第二种逐个把金额交给 `sum()`，不创建同规模的临时列表。订单很少时通常不必纠结速度；生成器表达式的主要学习价值是理解“按需产出”和减少中间列表。它不保证所有情况下运行得更快，也不适合需要反复读取同一批结果的场景。
+
+### 套用到当前订单代码：从元 float 改成整数分
+
+当前订单字段是 `amount: float`，例如 `199.0`。本练习把字段名和单位都明确下来，改成 `amount_cents: int`，并把 199 元存成 19900 分。需要同步修改以下位置，不能只改类型声明：
+
+1. `Order` 中的字段：`amount: float` 改为 `amount_cents: int`。
+2. `orders` 样例数据：每条记录的 `amount` 改为 `amount_cents`，金额乘 100 并写成整数，例如 `19900`。
+3. 汇总函数：把名称改为能说明单位的名称，例如 `calculate_total_amount_cents`，返回类型改为 `int`，并读取 `amount_cents`。
+4. 排序函数：排序键也改为读取 `amount_cents`；函数名可改成 `sort_orders_by_amount_cents`，让单位更清楚。
+5. 测试或其他样例字典：如果还写着 `amount`，也一起改成 `amount_cents`。
+6. 输出金额时再转换成人类可读格式。对于本练习的非负金额，可以用 `divmod(total_cents, 100)` 得到元和剩余分；存储和计算过程保持整数，不要先转成 `float`。
+
+可以先参照下面的函数形状，自己把它放进订单模块并补齐另一个统计口径：
+
+~~~python
+def calculate_total_amount_cents(orders: list[Order]) -> int:
+    return sum(order["amount_cents"] for order in orders)
+
+
+def calculate_paid_amount_cents(orders: list[Order]) -> int:
+    return sum(
+        order["amount_cents"]
+        for order in orders
+        if order["status"] == "paid"
+    )
+~~~
+
+第一个生成器表达式为每个订单产生一笔金额；第二个还带有 `if`，只为已支付订单产生金额。`sum()` 逐项消费这些金额，并把它们加起来。不要把所有订单金额都称作“销售额”：先明确“全部订单金额”和“已支付金额”的统计口径，再用函数名区分。
+
+样例订单转换后，全部订单金额应为 `129600` 分，已支付金额应为 `79800` 分；订单数量分别为 4 和 2。空订单列表的总额和数量都应为 0。这些手算结果可以用来检查实现是否符合预期。
+
 ### 动手练习
 
 1. 根据 Day 1 的决定，把总额函数名称或参数改到能准确表达统计口径。
@@ -140,9 +208,10 @@ def get_paid_orders(orders: list[Order]) -> list[Order]:
 
 ### 学习资源
 
-- [Python 教程：浮点数的限制](https://docs.python.org/3.12/tutorial/floatingpoint.html)
-- [Python 标准库：Decimal](https://docs.python.org/3.12/library/decimal.html)
-- [Python 官方教程：列表推导式和生成器表达式](https://docs.python.org/3.12/tutorial/datastructures.html#list-comprehensions)
+- [Python 官方教程：浮点数的限制](https://docs.python.org/3/tutorial/floatingpoint.html)
+- [Python 内置函数：sum()](https://docs.python.org/3/library/functions.html#sum)
+- [Python 官方教程：列表推导式和生成器表达式](https://docs.python.org/3/tutorial/datastructures.html#list-comprehensions)
+- [Python 标准库：Decimal](https://docs.python.org/3/library/decimal.html)
 
 ## Day 4：去重、排序和输入数据边界
 
