@@ -8,6 +8,9 @@
 
 ## 学习计划
 
+- [后续执行日程：Python → AI Agent，8 周学习过程](docs/learning-plan/study-process.md)
+- [Python → AI 应用：20 课可练习教程](docs/tutorial/README.md)
+- [后续学习路线：从订单分析到 AI 应用](docs/learning-plan/roadmap.md)
 - [第一周：Python 集合操作与订单分析](docs/learning-plan/week-01.md)
 
 ## 常用命令

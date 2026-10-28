@@ -1,0 +1,7 @@
+[
+  {"id": "10001", "user": "Alice", "amount_cents": 19900, "status": "paid"},
+  {"id": "10002", "user": "Bob", "amount_cents": 39900, "status": "pending"},
+  {"id": "10003", "user": "Alice", "amount_cents": 59900, "status": "paid"},
+  {"id": "10004", "user": "Tom", "amount_cents": 9900, "status": "cancelled"},
+  {"id": "10004", "user": "Tom", "amount_cents": 9900, "status": "cancelled"}
+]

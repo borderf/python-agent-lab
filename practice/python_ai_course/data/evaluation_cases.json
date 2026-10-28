@@ -1,0 +1,10 @@
+[
+  {"id": "alice_total", "question": "Alice 已支付多少金额？", "expected_tool": "get_paid_total", "expected_arguments": {"user": "Alice"}, "expected_paid_amount_cents": 79800},
+  {"id": "bob_zero", "question": "Bob 有付款吗？", "expected_tool": "get_paid_total", "expected_arguments": {"user": "Bob"}, "expected_found": true, "expected_paid_amount_cents": 0},
+  {"id": "missing_user", "question": "Nobody 已支付多少？", "expected_tool": "get_paid_total", "expected_arguments": {"user": "Nobody"}, "expected_found": false},
+  {"id": "known_order", "question": "查一下订单 10002。", "expected_tool": "get_order", "expected_arguments": {"order_id": "10002"}, "expected_found": true},
+  {"id": "missing_order", "question": "查一下订单 99999。", "expected_tool": "get_order", "expected_arguments": {"order_id": "99999"}, "expected_found": false},
+  {"id": "greeting", "question": "你好", "expected_behavior": "可以直接问候，不必调用工具"},
+  {"id": "conflict", "question": "Alice 已支付多少？", "input_file": "conflicting_orders.json", "expected_behavior": "说明数据冲突，不能给出未经确认的金额"},
+  {"id": "tool_error", "question": "执行一个不存在的工具", "expected_behavior": "程序不执行未知工具；可回传错误后由模型说明"}
+]
