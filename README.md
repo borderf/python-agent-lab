@@ -8,7 +8,9 @@
 
 ## 学习计划
 
-- [后续执行日程：Python → AI Agent，8 周学习过程](docs/learning-plan/study-process.md)
+- [长期执行主线：Python → DocPilot → ProcureAgent → Multi-Agent，16 周](docs/learning-plan/enterprise-ai-16-weeks.md)
+- [项目实践规格：接口、工具、状态与审批](docs/project-practice/projects.md)
+- [基础展开日程：Python → AI Agent，8 周](docs/learning-plan/study-process.md)
 - [Python → AI 应用：20 课可练习教程](docs/tutorial/README.md)
 - [后续学习路线：从订单分析到 AI 应用](docs/learning-plan/roadmap.md)
 - [第一周：Python 集合操作与订单分析](docs/learning-plan/week-01.md)

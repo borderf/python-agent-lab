@@ -1,0 +1,6 @@
+[
+  {"project_id": "P100", "tenant_id": "tenant-a", "name": "虚构办公设备采购", "budget_cents": 10000000, "quoted_amount_cents": 9500000, "prepayment_percent": 20, "supplier_id": "S100"},
+  {"project_id": "P200", "tenant_id": "tenant-a", "name": "虚构超预算采购", "budget_cents": 10000000, "quoted_amount_cents": 12000000, "prepayment_percent": 25, "supplier_id": "S200"},
+  {"project_id": "P300", "tenant_id": "tenant-a", "name": "虚构资料不足采购", "budget_cents": 5000000, "quoted_amount_cents": 4000000, "prepayment_percent": null, "supplier_id": "S300"},
+  {"project_id": "P900", "tenant_id": "tenant-b", "name": "另一教学租户采购", "budget_cents": 10000000, "quoted_amount_cents": 9000000, "prepayment_percent": 10, "supplier_id": "S900"}
+]

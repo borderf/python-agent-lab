@@ -1,0 +1,6 @@
+[
+  {"supplier_id": "S100", "tenant_id": "tenant-a", "name": "虚构供应商甲", "certificate_valid_until": "2030-12-31"},
+  {"supplier_id": "S200", "tenant_id": "tenant-a", "name": "虚构供应商乙", "certificate_valid_until": "2026-09-01"},
+  {"supplier_id": "S300", "tenant_id": "tenant-a", "name": "虚构供应商丙", "certificate_valid_until": null},
+  {"supplier_id": "S900", "tenant_id": "tenant-b", "name": "另一教学租户供应商", "certificate_valid_until": "2030-12-31"}
+]

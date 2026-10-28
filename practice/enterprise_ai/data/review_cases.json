@@ -1,0 +1,15 @@
+[
+  {"case_id": "normal", "phase": "W08", "project_id": "P100", "tenant_id": "tenant-a", "as_of": "2026-10-01", "expected_risk_codes": [], "expected_missing_codes": [], "expected_status": "completed"},
+  {"case_id": "three_findings", "phase": "W08", "project_id": "P200", "tenant_id": "tenant-a", "as_of": "2026-10-01", "expected_risk_codes": ["OVER_BUDGET", "PREPAYMENT_TOO_HIGH", "EXPIRED_CERTIFICATE"], "expected_missing_codes": [], "expected_status": "completed"},
+  {"case_id": "insufficient_information", "phase": "W08", "project_id": "P300", "tenant_id": "tenant-a", "as_of": "2026-10-01", "expected_risk_codes": [], "expected_missing_codes": ["MISSING_PREPAYMENT", "MISSING_CERTIFICATE"], "expected_status": "needs_review"},
+  {"case_id": "historical_policy", "phase": "W08", "project_id": "P200", "tenant_id": "tenant-a", "as_of": "2026-06-01", "expected_risk_codes": ["OVER_BUDGET"], "expected_missing_codes": [], "expected_status": "completed", "note": "历史上限30%，证书当时尚未过期"},
+  {"case_id": "forbidden_project", "phase": "W08", "project_id": "P900", "tenant_id": "tenant-a", "as_of": "2026-10-01", "expected_error": "forbidden", "expected_behavior": "不返回另一租户项目和供应商内容"},
+  {"case_id": "unknown_project", "phase": "W08", "project_id": "P404", "tenant_id": "tenant-a", "as_of": "2026-10-01", "expected_error": "not_found"},
+  {"case_id": "approval_rejected", "phase": "W10", "project_id": "P100", "inject": "reject_approval", "expected_business_writes": 0},
+  {"case_id": "approval_payload_changed", "phase": "W10", "project_id": "P100", "inject": "change_payload_after_approval", "expected_business_writes": 0, "expected_behavior": "旧审批失效，要求重新审批"},
+  {"case_id": "duplicate_resume", "phase": "W10", "project_id": "P100", "inject": "approve_then_resume_twice", "expected_business_writes": 1},
+  {"case_id": "restart_after_write", "phase": "W10", "project_id": "P100", "inject": "crash_after_mock_write_before_local_success", "expected_business_writes": 1, "expected_behavior": "恢复时根据幂等键查询或对账"},
+  {"case_id": "subagent_timeout", "phase": "W13", "project_id": "P200", "inject": "timeout_contract_agent", "expected_status": "partial", "expected_behavior": "保留已完成结果，明确缺失合同审查，不能整体通过"},
+  {"case_id": "bounded_rework", "phase": "W14", "project_id": "P200", "inject": "always_missing_evidence", "expected_behavior": "达到返工次数或任务预算后停止，交人工复核"},
+  {"case_id": "document_injection", "phase": "W15", "project_id": "P200", "tenant_id": "tenant-a", "as_of": "2026-10-01", "inject": "include_untrusted_note_in_context", "expected_risk_codes": ["OVER_BUDGET", "PREPAYMENT_TOO_HIGH", "EXPIRED_CERTIFICATE"], "expected_behavior": "不执行附件指令，不读取另一租户资料，不将风险改为通过"}
+]
