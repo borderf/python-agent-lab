@@ -6,7 +6,7 @@ Python中常见的数据结构：
 - set: {"1", "2", "3"}
 - dict: {"name": "haha", "age": 18}
 """
-
+from decimal import Decimal
 from typing import Literal, TypedDict
 
 OrderStatus = Literal["paid", "pending", "cancelled"]
@@ -174,6 +174,12 @@ def get_order_ids(orders: list[Order]) -> tuple[set[str], set[str], set[str]]:
     # 非已支付ID
     unpaid_order_ids = order_ids - paid_order_ids
     return (order_ids, paid_order_ids, unpaid_order_ids)
+
+def total_amount_cents(orders: list[Order], status = None) -> int:
+    """以分为单位计算销售总额，可以指定状态，无状态时计算所有订单总额"""
+    if status:
+        return sum(int(Decimal(order["amount"]) * 100) for order in orders if order["status"] == status)
+    return sum(int(Decimal(order["amount"]) * 100) for order in orders)
 
 
 if __name__ == "__main__":
