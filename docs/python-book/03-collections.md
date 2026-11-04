@@ -6,23 +6,213 @@
 
 根据顺序、查找、去重和分组要求选择结构。前置：第1–2章。
 
+**本章从这里开始：** 现在有多笔订单：既要保留原顺序，又要查重、分组、排序和汇总。用同一种容器硬做全部工作往往会丢失信息，本章从每个操作需要保留什么开始选择结构。
+
 ## 2. 基础知识讲解
 
-list 适合有序可变序列，tuple 适合固定结构的值序列，dict 适合键值映射，set 适合唯一元素及集合运算。字典保留插入顺序，不是自动排序；集合不提供业务应依赖的原始顺序。
+### 2.1 先用列表保存一批记录
 
-遍历时用 enumerate 获取索引，zip 配对多个序列；需要检查长度一致时明确采用相应检查策略。any/all 会短路，空输入的结果分别为 False/True。推导式用于筛选和转换，复杂状态流程用普通循环更清楚。
+list保存有顺序的元素，可通过下标和切片访问，通过append追加一个元素、extend追加一批元素。两者不同：append([1,2])把整个列表放进一个位置，extend([1,2])依次添加两个元素。列表可以存订单字典，但运行时不会自动保证每个元素结构相同。
 
-sorted 返回新列表，list.sort 原地修改且返回 None。排序 key 提取比较字段，reverse 控制方向；相同 key 的相对顺序保持稳定。Counter/defaultdict/deque 分别解决计数、分组默认值和双端队列问题。
+tuple也保存有序元素，创建后不能替换某个位置的引用。它适合固定结构的返回值或记录；单元素tuple要有逗号，例如`(1,)`。解包可以把固定结构赋给多个名称，但元素数量必须符合要求。
+
+
+
+#### 案例推进：第一轮：列表保存顺序，字典表达记录
+
+```python
+# study-example: S03A
+orders = [
+    {"id": "A", "user": "Alice", "amount_cents": 1990, "status": "paid"},
+    {"id": "B", "user": "Bob", "amount_cents": 1000, "status": "pending"},
+    {"id": "C", "user": "Alice", "amount_cents": 10, "status": "paid"},
+]
+paid = []
+total = 0
+for order in orders:
+    if order["status"] == "paid":
+        paid.append(order["id"])
+        total += order["amount_cents"]
+assert paid == ["A", "C"] and total == 2000
+```
+
+外层列表回答“第几笔、按什么顺序”，内层字典回答“字段叫什么、值是什么”。order每轮绑定当前记录，读取字段没有复制它；paid另建列表，只追加需要的ID。若改成order["status"] = ...，则会修改原始记录，这与读取后产生新结果不同。
+
+列表的append追加一个对象，extend逐个追加来源中的元素；insert在位置前插入，pop移除并返回某项，remove按值删除首个匹配项。删除前要明确不存在时怎样处理。遍历同一个列表时再删除其中元素会改变后续索引，常见筛选需求更适合构造新列表。
+
+### 2.2 用字典把字段和名称联系起来
+
+dict将键映射到值，订单可以表示为`{"id":"A","status":"paid"}`。`row["id"]`要求字段存在，缺失时抛KeyError；get允许指定默认值。字段不存在与字段值为None可能有不同含义，不能总用一个get结果混淆二者。
+
+遍历字典本身得到键，items得到键和值。写入已有键更新其值，不改变该键原有插入位置；删除后重新插入则是新的插入。保存多个同ID订单时，不要直接覆盖旧值而丢掉冲突信息。
+
+
+
+#### 案例推进：第二轮：用映射累积每个用户的记录
+
+```python
+# study-example: S03B
+orders = [{"id":"A","user":"Alice"}, {"id":"B","user":"Bob"}, {"id":"C","user":"Alice"}]
+groups = {}
+for order in orders:
+    user = order["user"]
+    if user not in groups:
+        groups[user] = []
+    groups[user].append(order["id"])
+assert groups == {"Alice": ["A", "C"], "Bob": ["B"]}
+assert list(groups) == ["Alice", "Bob"]
+```
+
+第一轮创建Alice的桶，第二轮创建Bob的桶，第三轮复用Alice的桶。若每轮都写groups[user] = []，旧分组会被覆盖。dict.items提供键值对，keys/values提供相应视图；视图反映字典内容，不能把它当作修改时完全独立的快照。
+
+`row[key]`适合必需字段，缺失应暴露错误；get适合确有默认语义的可选项。update合并时后来的同名值覆盖先前值；它适用于明确覆盖的配置，却不适用于尚未检查冲突的订单去重。
+
+### 2.3 用集合表达唯一性与成员关系
+
+set保存唯一可哈希元素，适合记录订单ID；空集合写set()，`{}`是空字典。`a | b`求并集，`a & b`求交集，`a - b`求差集，`a <= b`检查子集。集合不能承担“保留输入顺序”的职责。
+
+字典和列表通常不可直接放进set；需要先提取业务标识。tuple是否可哈希取决于内部元素，不是外面套一个tuple就自动解决问题。第三节会说明哈希与相等如何共同工作。
+
+
+
+#### 案例推进：第三轮：元组与集合承担不同信息
+
+```python
+# study-example: S03C
+record = ("A", 1990)
+order_id, cents = record
+assert order_id == "A" and cents == 1990
+one = ("A",)
+assert len(one) == 1
+all_ids = {"A", "B", "C"}
+paid_ids = {"A", "C"}
+assert all_ids - paid_ids == {"B"}
+assert paid_ids <= all_ids
+```
+
+元组适合位置固定的组合，逗号决定单元素元组；集合适合唯一成员和集合运算。集合丢弃重复次数，也不承诺输入顺序。若要判断订单A第二次出现时内容是否冲突，还需要保存A的首条内容，只有ID集合不够。
+
+### 2.4 从循环过渡到推导式
+
+```python
+rows = [{"id":"A","status":"paid"}, {"id":"B","status":"pending"}]
+paid_ids = []
+for row in rows:
+    if row["status"] == "paid":
+        paid_ids.append(row["id"])
+# 同一筛选转换也可以写成：
+paid_ids = [row["id"] for row in rows if row["status"] == "paid"]
+```
+
+先理解循环中的取元素、判断、追加，再读推导式的“结果表达式、遍历、条件”。如果需要多步更新、错误定位或冲突处理，普通循环通常更清楚。字典/集合推导式改变的是输出结构，不会替你选择正确业务规则。
+
+
+
+#### 案例推进：第四轮：先写清循环，再压缩表达
+
+筛选与转换一步完成时可以使用推导式；多步更新、错误定位与冲突处理保留普通循环更容易讲清。排序前先决定按金额、按ID还是按多字段比较。
+
+```python
+# study-example: S03D
+rows = [{"id":"B","amount_cents":10}, {"id":"A","amount_cents":10}, {"id":"C","amount_cents":5}]
+ids = [row["id"] for row in rows if row["amount_cents"] >= 10]
+assert ids == ["B", "A"]
+amounts = [10, 10, 5]
+assert sorted(amounts) == [5, 10, 10]
+assert amounts == [10, 10, 5]
+copied = amounts.copy()
+result = copied.sort()
+assert copied == [5, 10, 10] and result is None
+```
+
+本例先对数字排序；第四章介绍函数后再用key函数排序订单。enumerate提供位置与元素，zip按位置配对；若两个来源应严格等长，可用zip(..., strict=True)让不一致显式失败。any/all短路，空输入分别得到False/True，要结合“至少一项”和“没有反例”的含义理解。
+
+### 2.5 遍历与排序的工具
+
+enumerate同时取得序号和元素，zip配对序列；长度不一致时应明确截断是否允许。sorted返回新列表，list.sort原地修改且返回None。key提取排序依据，reverse选择方向；相同key的相对顺序稳定。
+
+any寻找一个真值，all检查是否全部为真，两者会短路；空输入结果分别为False和True。Counter、defaultdict和deque是在常见需求上专门化的容器，后续标准库章再展开。
+
+
+
+#### 案例推进：第五轮：复制到底复制到哪里
+
+```python
+# study-example: S03E
+original = [{"id": "A", "tags": ["new"]}]
+outer_copy = original.copy()
+record_copy = [dict(original[0])]
+assert outer_copy is not original
+assert outer_copy[0] is original[0]
+assert record_copy[0] is not original[0]
+assert record_copy[0]["tags"] is original[0]["tags"]
+```
+
+可以把关系画成“名称→外层列表→订单字典→tags列表”。复制外层只替换一个节点；复制字典再替换一个节点；最里面的tags仍可能共享。先指出函数会改动哪一层，再决定复制范围。这样比见到可变对象就一律deepcopy更能表达所有权。
 
 ## 3. 原理讲解与推导
 
-哈希与相等共同决定键定位。只保存 ID 的集合不能比较重复记录内容；ID→首条记录的字典能同时维护顺序和冲突检查。复杂度是选择依据之一，还需考虑数据规模、常数和可维护性。
+### 3.1 容器保存的仍是对象引用
 
-### 6. 字典如何定位键：哈希、相等与顺序
+复制外层列表不等于复制所有订单。列表的顺序和字典的字段值都是容器状态；修改内部订单后，其他引用者也可能观察到。处理函数必须说明是否只读、是否复制、返回结果能否被调用方修改。
 
-【语义】可哈希对象需要在使用期间保持哈希值稳定，相等对象必须有相等哈希值；反过来，哈希值相同不意味着相等。字典可以区分发生碰撞但不相等的键。
+### 3.2 哈希缩小候选，相等确认键
 
-【实现观察】常规 CPython 使用哈希表实现 dict/set，平均查找代价通常优于逐项扫描，但不是所有输入都保证 O(1)。字典插入顺序是语言保证，不是按键排序；set 不提供应依赖的原始插入顺序。
+哈希表利用哈希值组织候选位置，仍需相等判断确认键。相等对象应有相同哈希值，哈希碰撞却不代表相等。作为键使用期间，影响哈希和相等的状态必须符合稳定性约定。
+
+### 3.3 数据结构由要保持的信息决定
+
+只记录ID可以判断是否见过，却无法比较内容。记录ID→首条订单，便能判断完全重复还是字段冲突，同时利用插入顺序输出。选结构之前先列出必须保留的信息：顺序、次数、首条内容还是全部历史。
+
+### 3.4 机制验证：预测、运行与回看
+
+先读上面的机制，再逐行预测下列实验的结果与副作用。E编号是保留的实验索引，不是章节编号；其中涉及后续协议的细节可在相应章节二次回看。
+
+#### 验证实验 E02
+
+```python
+# experiment: E02
+from copy import deepcopy
+a = [{"tags": []}]
+alias = a
+shallow = a.copy()
+deep = deepcopy(a)
+assert alias is a and shallow is not a
+a[0]["tags"].append("paid")
+assert shallow == [{"tags": ["paid"]}]
+assert deep == [{"tags": []}]
+alias = []
+assert a == [{"tags": ["paid"]}]
+t = ([],)
+try:
+    t[0] += [1]
+except TypeError:
+    pass
+else:
+    raise AssertionError("tuple 的槽位不能重新赋值")
+assert t == ([1],)  # 内部列表先完成了原地修改，之后写回槽位失败
+```
+
+#### 验证实验 E03
+
+```python
+# experiment: E03
+events = []
+def marker():
+    events.append("called")
+    return "fallback"
+assert ("" or marker()) == "fallback"
+assert ("ok" or marker()) == "ok"
+assert events == ["called"]
+assert (0 and marker()) == 0
+assert bool("False") is True
+assert isinstance(True, int) and True == 1
+value = 0
+assert (value or 10) == 10
+assert (10 if value is None else value) == 0
+```
+
+#### 验证实验 E06
 
 ```python
 # experiment: E06
@@ -44,11 +234,6 @@ ordered["B"] = 3
 assert list(ordered) == ["B", "A"]
 ```
 
-误区：哈希值作为跨进程持久标识；tuple 一定可哈希；键对象加入 dict 后可以随意修改影响相等/哈希的字段。覆盖 __eq__ 后应重新考虑 __hash__，不要盲目给可变值对象添加哈希。
-
-应用：用 ID → 首条订单字典实现冲突检查，既保存首见次序，也保留可比较内容。
-
-迁移问题：只用 seen_ids 为什么能去重，却无法知道同 ID 是否金额冲突？
 
 
 ## 4. 示例与逐步走查
@@ -59,12 +244,17 @@ rows = [{"id":"A","status":"paid"}, {"id":"B","status":"pending"}]
 paid = [row["id"] for row in rows if row["status"] == "paid"]
 by_status = {}
 for row in rows:
-    by_status.setdefault(row["status"], []).append(row["id"])
+    status = row["status"]
+    if status not in by_status:
+        by_status[status] = []
+    by_status[status].append(row["id"])
 assert paid == ["A"]
 assert by_status == {"paid":["A"], "pending":["B"]}
 ```
 
-阅读时先预测输入、输出、异常、副作用和资源状态，再执行；修改一处条件验证自己的解释。独立示例有标记，框架片段和项目流程另按依赖/服务条件验证。
+### 4.1 沿输入到结果逐步解释
+
+paid_ids从A/B两条记录依次读取状态，只追加A；by_status循环第一次见paid和pending时各建列表，然后追加ID。返回的是不同需求下的两个结果：已支付ID序列，以及状态到ID序列的映射。
 
 ## 5. 动手练习
 
@@ -82,6 +272,12 @@ assert by_status == {"paid":["A"], "pending":["B"]}
 
 验收：ID 为 B/A/B 且 B 两条内容相同，输出 B/A；若第二条 B 金额改变，明确报错。额外测试空输入和输入不变。解释只用 set 保存 ID 为何不足以检查字段冲突。
 
+### L01：引用与复制（P02）
+
+用 `a = [{"tags": ["paid"]}]` 分别构造别名、浅复制和深复制。修改外层列表，再修改 tags，记录三个版本受到的影响。预测结果后运行，并画出名称与对象的引用关系。
+
+验收：能解释为什么“外层不是同一个列表”不足以证明内部状态独立；不用 id 数值规律推断语义。
+
 ## 6. 验收与自测
 
 **行为验收：** 同ID完全重复只留一条，字段冲突报错；空输入有定义；原列表和内部字典不被修改。
@@ -89,6 +285,17 @@ assert by_status == {"paid":["A"], "pending":["B"]}
 **原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
 
 **提交证据：** 实现位置、运行命令、正常案例、至少一个错误/边界案例、一次失败原因和修复记录。自动检查只证明其覆盖行为；未实现任务不因示例通过而算完成。
+
+### 6.1 先预测，再查看参考推导
+
+一个函数声称“不修改输入”，却返回了原订单字典组成的新列表。这个接口是否已经保证调用方修改结果不会影响原输入？
+
+<details>
+<summary>完成预测后查看解释</summary>
+
+没有。函数执行时不修改输入，与返回值不共享内部可变对象是两个契约。新列表仍可能引用原字典；若要求后者，应复制相应记录或返回不可变表示，并用修改结果的案例验证。
+
+</details>
 
 ## 7. 面试问答与迁移
 
@@ -98,7 +305,7 @@ assert by_status == {"paid":["A"], "pending":["B"]}
 
 ## 8. 本章小结与参考
 
-先达到行为与原理两类验收，再继续后续依赖本章的任务。遇到不熟悉的内容回到例子做小实验，不以阅读完成代替掌握。
+本章把单个值组织为记录和记录集合，并明确修改与复制。下一章把重复的数据处理封装为函数，继续追踪参数绑定和副作用。
 
 官方参考：[本章资料](https://docs.python.org/zh-cn/3.12/tutorial/)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
 

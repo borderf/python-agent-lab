@@ -6,21 +6,130 @@
 
 按数据语义选择标准库，理解时间和事务边界。前置：第3、5、7章。
 
+**本章从这里开始：** 接下来订单会遇到生效日期、状态统计、最近错误和批次入库。标准库的价值在于已有抽象恰好表达需求，而不是把工具名字背下来。
+
 ## 2. 基础知识讲解
 
-Counter、defaultdict、deque 面向计数、默认分组和队列；itertools 组合迭代过程，groupby 按相邻键分组；heapq 保持堆关系，不代表整个列表排好序。工具要符合输入顺序和空间需求。
+### 2.1 标准库是按问题组织的工具集合
 
-datetime 的 naive/aware、固定偏移与地区时区不是同一个概念。绝对时间比较要保留足够时区信息；业务日期区间的闭开端点要写进规则。
+遇到计数先考虑Counter，按键收集先考虑普通dict或defaultdict，维护双端队列先考虑deque。使用专门容器前说明需要的操作，例如是否频繁从两端弹出、是否需要保留次数，不因名字高级就替换已有简单结构。
 
-sqlite3 涉及连接、游标、事务与参数化 SQL。事务作用域与连接生命周期分开；正则检查格式，业务规则检查意义。查文档优于背下整个标准库。
+itertools组合迭代过程，islice取片段，chain串联来源，groupby按相邻键形成组。若需要把所有相同键记录聚到一起，应先选择排序或字典分组；groupby不会自动变成SQL式全局聚合。
+
+
+
+#### 案例推进：统计、分组与相邻分组并不相同
+
+```python
+# study-example: S08A
+from collections import Counter, defaultdict, deque
+from itertools import groupby
+states = ["paid", "pending", "paid"]
+assert Counter(states) == {"paid": 2, "pending": 1}
+groups = defaultdict(list)
+for position, state in enumerate(states):
+    groups[state].append(position)
+assert groups["paid"] == [0, 2]
+adjacent = [(key, list(items)) for key, items in groupby(states)]
+assert adjacent == [("paid", ["paid"]), ("pending", ["pending"]), ("paid", ["paid"])]
+recent = deque(maxlen=2)
+recent.extend(["e1", "e2", "e3"])
+assert list(recent) == ["e2", "e3"]
+```
+
+Counter保留次数，defaultdict在缺键访问时调用工厂，deque保存有界最近记录。groupby只把相邻同键元素合成一组，不自动聚合所有相同键；先排序虽可聚合，却改变全局顺序，是否允许要看需求。
+
+### 2.2 时间值必须包含足够业务信息
+
+date表达日期，datetime表达日期与时间；naive datetime没有完整时区含义，aware datetime带时区信息。固定UTC偏移与地区时区不同，地区规则可能包含夏令时和历史变化。
+
+保存事件时间通常明确采用UTC或带偏移的格式，展示时再转换；保存制度生效日期则按业务日期规则比较。区间起止是否包含端点应写清楚，例如start <= t < end。遇到没有时区的外部时间，不应无约定地猜它属于哪个区域。
+
+
+
+#### 案例推进：先统一时间线，再比较有效区间
+
+```python
+# study-example: S08B
+from datetime import datetime, timezone
+local = datetime.fromisoformat("2026-11-04T10:00:00+08:00")
+utc = datetime.fromisoformat("2026-11-04T02:00:00+00:00")
+assert local == utc and local.astimezone(timezone.utc) == utc
+start = datetime.fromisoformat("2026-11-01T00:00:00+00:00")
+end = datetime.fromisoformat("2026-12-01T00:00:00+00:00")
+assert start <= utc < end
+assert not (start <= end < end)
+```
+
+左闭右开让相邻有效区间在边界不重叠。事件时刻、业务日期和持续时间分别表达；地区时区可能有夏令时，而固定偏移只是一个偏移值。经过多久用单调计时来源，发生在何时用明确时区的时钟值。
+
+### 2.3 字符串方法与正则分别适合什么
+
+简单去空白、拆分或前缀检查用字符串方法更直接；结构匹配可用re。匹配出一个看似日期或订单号的文本，只是格式检查，日期是否存在、编号是否可访问仍需其他验证。限制输入大小并观察不匹配情况，不只测理想短文本。
+
+### 2.4 排序、堆与Top-K
+
+完整排序得到全量顺序，适合后续多次有序遍历；只要最前K项时，可以评估堆工具以减少不必要工作。heapq维护堆关系，不代表底层列表整体有序；并列时需要统一比较规则，才能与排序结果公平比较。
+
+statistics提供常用统计，性能测量和业务统计都要说明样本。随机模拟数据要保留种子或避免断言依赖随机结果；安全标识和唯一性需求另选适合的工具。
+
+
+
+#### 案例推进：只取Top-K时先比较结果，再比较代价
+
+heapq适合维护堆或从大量元素中取少量候选，排序适合完整有序结果；K接近总量时不应想当然认定堆更快。统一并列规则、输入规模、重复次数与测量环境，再用timeit/perf_counter/cProfile/tracemalloc分别观察耗时、热点和分配。
+
+正则也按需求使用：fullmatch检查整段结构，search寻找局部，分组提取字段。匹配日期文本不等于日期真实存在。简单strip、split与startswith足够时保留简单实现；大输入和不匹配情况也应进入测试。
+
+### 2.5 用SQLite练习持久化边界
+
+连接负责与数据库交互，SQL创建表和查询记录，参数占位符把值与语句结构分开。批次写入必须约定失败时回滚全部还是部分保留，连接关闭和事务提交是两个不同责任。
+
+Python3.12的sqlite3有不同事务控制选项。示例使用什么配置，就按该配置测试；不要把连接with退出一律理解为已经关闭连接，也不要把一个数据库事务看成跨HTTP服务的事务。
+
+
+
+#### 案例推进：用一次重复主键看见事务回滚
+
+```python
+# study-example: S08C
+import sqlite3
+from contextlib import closing
+with closing(sqlite3.connect(":memory:")) as connection:
+    connection.execute("CREATE TABLE orders (id TEXT PRIMARY KEY, cents INTEGER NOT NULL)")
+    connection.commit()
+    try:
+        with connection:
+            connection.execute("INSERT INTO orders VALUES (?, ?)", ("A", 10))
+            connection.execute("INSERT INTO orders VALUES (?, ?)", ("A", 20))
+    except sqlite3.IntegrityError:
+        pass
+    else:
+        raise AssertionError("重复主键应失败")
+    assert connection.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
+```
+
+同一批次第一条成功、第二条失败，事务回滚第一条；closing另外负责关闭连接。占位符传值避免把引号当SQL结构，不适用于任意表名/列名。这个示例是标准库SQLite练习，后面数据库服务的连接池与迁移还需要工程层设计。
 
 ## 3. 原理讲解与推导
 
-先写不变量：金额守恒、时间可比较、批次全成或全败，再选择具体数据结构、格式和事务策略。
+### 3.1 库抽象保留了哪些信息
 
-### 20. 数据库 with 为什么没关连接：事务与资源是两件事
+Counter保留次数，set只保留唯一性；groupby依赖相邻顺序；堆维护局部结构而非完整排序。先找到工具维持的不变量，才知道它能否支持后续操作。
 
-【sqlite3 约定】连接作为上下文管理器时主要管理已有事务的提交/回滚，不负责自动关闭连接，也不意味着所有语句和所有事务配置行为相同。本例使用 Python 3.12 默认的传统事务控制；改变 autocommit/isolation_level 后要重新核对边界。
+### 3.2 时间与事务都需要明确边界
+
+时间比较依赖表示中是否包含足够时区信息，事务行为依赖连接控制模式和操作范围。看起来相似的两个对象或上下文，不一定承担同样含义，应通过端点与失败实验验证。
+
+### 3.3 参数化处理值而不改语句结构
+
+用户名称中的引号不应改变SQL含义。占位符让驱动按值处理输入；表名等结构性选择不能简单用值占位符替代，而应采用受控白名单。数据库出错后核对实际持久结果，不只看是否抛异常。
+
+### 3.4 机制验证：预测、运行与回看
+
+先读上面的机制，再逐行预测下列实验的结果与副作用。E编号是保留的实验索引，不是章节编号；其中涉及后续协议的细节可在相应章节二次回看。
+
+#### 验证实验 E20
 
 ```python
 # experiment: E20
@@ -46,11 +155,7 @@ else:
     raise AssertionError("关闭后不能继续查询")
 ```
 
-参数化 SQL 把值和语句结构分开，不应使用字符串拼接处理用户值。一个数据库事务也不会自动覆盖另一个 HTTP 服务的写入；跨边界副作用需单独设计幂等、对账和失败恢复。
 
-应用：把连接生命周期、事务范围和业务操作分开写清楚。用临时数据库验证批次失败后是否真的全部回滚。
-
-迁移问题：写入外部服务已经成功、本地记录成功状态前崩溃，单靠重试为什么可能重复操作？
 
 ## 4. 示例与逐步走查
 
@@ -63,7 +168,9 @@ assert counts["paid"] == 2 and counts["missing"] == 0
 assert datetime.fromisoformat("2026-11-04T10:00:00+08:00") == datetime.fromisoformat("2026-11-04T02:00:00+00:00")
 ```
 
-阅读时先预测输入、输出、异常、副作用和资源状态，再执行；修改一处条件验证自己的解释。独立示例有标记，框架片段和项目流程另按依赖/服务条件验证。
+### 4.1 沿输入到结果逐步解释
+
+Counter统计paid出现两次，未出现的键读取为0；这与普通dict直接取缺失键不同。两个带不同时区偏移的datetime表示同一绝对时刻，因此相等；若去掉时区信息，就不能再按相同依据推断。
 
 ## 5. 动手练习
 
@@ -89,6 +196,17 @@ assert datetime.fromisoformat("2026-11-04T10:00:00+08:00") == datetime.fromisofo
 
 **提交证据：** 实现位置、运行命令、正常案例、至少一个错误/边界案例、一次失败原因和修复记录。自动检查只证明其覆盖行为；未实现任务不因示例通过而算完成。
 
+### 6.1 先预测，再查看参考推导
+
+连接的with与closing为什么同时出现？数据库事务能否让随后的HTTP写入也一起回滚？
+
+<details>
+<summary>完成预测后查看解释</summary>
+
+连接上下文按所选事务模式处理提交/回滚，closing负责连接资源释放。一个数据库事务不自动覆盖另一个HTTP系统；跨系统失败要在幂等和恢复章节处理。
+
+</details>
+
 ## 7. 面试问答与迁移
 
 groupby 与 SQL GROUP BY 有什么差异？连接 with 是否等于关闭？Top-K 何时不必全排序？
@@ -97,7 +215,7 @@ groupby 与 SQL GROUP BY 有什么差异？连接 with 是否等于关闭？Top-
 
 ## 8. 本章小结与参考
 
-先达到行为与原理两类验收，再继续后续依赖本章的任务。遇到不熟悉的内容回到例子做小实验，不以阅读完成代替掌握。
+本章为数据处理增加时间和数据库能力。下一章用类型关系和校验模型明确各层契约，避免把工具使用当作数据已经可信的证明。
 
 官方参考：[本章资料](https://docs.python.org/zh-cn/3.12/tutorial/)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
 

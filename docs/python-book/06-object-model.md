@@ -6,21 +6,189 @@
 
 掌握实例状态、值对象、方法绑定和常用协议。前置：第4–5章。
 
+**本章从这里开始：** 两个审查任务各有自己的发现列表，同时又要支持统一的长度、展示和查询操作。类在这里用于维护状态与不变量，再通过协议接入已有语言工具。
+
 ## 2. 基础知识讲解
 
-实例属性保存各对象状态，类属性由类及实例查找共享。普通方法绑定 self，classmethod 绑定类，staticmethod 不自动绑定实例。组合适合替换协作对象，继承适合明确的可替代关系。
+### 2.1 从独立状态开始设计类
 
-dataclass 生成常见样板行为，不自动验证全部类型；field(default_factory=...) 避免共享可变默认状态。frozen 限制普通重新赋值，不递归冻结内部容器。
+类定义创建实例的结构与行为，实例保存某次任务自己的数据。__init__初始化实例，方法的首个参数按惯例叫self。类属性适合共享常量或明确共享的配置；每个实例独立的列表应在初始化或default_factory中建立。
 
-__repr__/__str__、__len__、__iter__、__contains__ 等协议使自定义对象参与标准操作。属性访问涉及描述器和 MRO；super 沿 MRO 继续查找。只在有需求时深入元类和复杂属性拦截。
+```python
+class Job:
+    def __init__(self, name):
+        self.name = name
+        self.findings = []
+    def add_finding(self, text):
+        self.findings.append(text)
+```
+
+创建两个Job不应让一个任务的发现混进另一个。是否用类，取决于是否需要维持状态、封装不变量或实现协议；单纯计算常可用函数完成。
+
+
+
+#### 案例推进：从两份独立状态开始
+
+```python
+# study-example: S06A
+class ReviewJob:
+    def __init__(self, name):
+        self.name = name
+        self.findings = []
+    def add(self, finding):
+        self.findings.append(finding)
+    def __len__(self):
+        return len(self.findings)
+    def __repr__(self):
+        return f"ReviewJob(name={self.name!r}, count={len(self)})"
+
+a, b = ReviewJob("A"), ReviewJob("B")
+a.add("缺少附件")
+assert len(a) == 1 and len(b) == 0
+assert a.findings is not b.findings
+assert "count=1" in repr(a)
+```
+
+创建实例时初始化name与findings；调用a.add会把a绑定为self。len(a)由__len__提供语义，repr用于调试观察。若把findings=[]移到类体且不建立实例属性，两个任务可能修改同一列表；错误不是类这个工具本身造成，而是共享状态的位置不符合需求。
+
+### 2.2 方法、属性与构造入口
+
+通过实例访问普通方法时，通常得到绑定了实例的方法；classmethod绑定类，适合按类构造或处理类相关行为；staticmethod不自动绑定实例，可以表达放在类命名空间内的独立操作。
+
+property把属性读取或更新接到受控代码上，让调用方保持`item.price`形式。它适合维护不变量，不能当作安全隔离。若只读property内部仍引用可变对象，调用方可能通过该对象修改状态。
+
+
+
+#### 案例推进：再建立受控属性与构造入口
+
+```python
+# study-example: S06B
+class Limit:
+    def __init__(self, value):
+        if type(value) is not int or value <= 0:
+            raise ValueError("limit必须是正整数")
+        self._value = value
+    @property
+    def value(self):
+        return self._value
+    @classmethod
+    def from_text(cls, text):
+        return cls(int(text))
+
+limit = Limit.from_text("3")
+assert limit.value == 3
+try:
+    limit.value = 4
+except AttributeError:
+    pass
+else:
+    raise AssertionError("只读property应拒绝普通赋值")
+```
+
+classmethod接收实际类cls，因此替代构造入口能继续使用类本身的校验。property让读取仍采用属性形式，通过描述器参与访问。下划线是内部使用约定，双下划线名称改写也不是权限隔离；Python封装主要服务于接口与维护，不能用它保护不可信代码。
+
+### 2.3 dataclass减少重复但不替代设计
+
+dataclass可以生成初始化、repr和比较等方法；用field(default_factory=list)为实例创建独立容器。frozen限制常规字段重新绑定，不递归冻结内部对象。类型标注不会自动验证负金额或错误币种，这些需另外定义。
+
+值对象的相等和哈希要一致。一个可变对象是否适合放入set或作为dict键，不能仅通过开启unsafe_hash解决；先问影响相等的状态会不会改变。
+
+
+
+#### 案例推进：数据类减少重复，规则仍需自己写
+
+```python
+# study-example: S06C
+from dataclasses import dataclass, field
+@dataclass
+class Report:
+    job_id: str
+    findings: list[str] = field(default_factory=list)
+
+one, two = Report("A"), Report("B")
+one.findings.append("missing")
+assert two.findings == []
+assert one == Report("A", ["missing"])
+```
+
+这里字段后的类型标注先读作字段说明，第九章学习其检查含义。dataclass可以生成初始化和相等比较，但不会自动验证每条finding符合业务。default_factory每次需要默认值时建立列表；frozen限制常规字段绑定，不会递归冻结列表。设计相等、哈希和缓存键时必须同时检查内部可变性。
+
+### 2.4 通过协议参与语言操作
+
+__repr__服务调试，__str__服务可读展示；__len__、__iter__、__contains__让对象支持长度、遍历和成员检查。实现协议前先定义语义，例如`"A" in orders`按ID还是按完整记录判断。
+
+运算符重载遇到不支持的其他类型可返回NotImplemented，让语言尝试相关回退；它不是NotImplementedError异常。只实现有实际用途且符合直觉的协议。
+
+### 2.5 继承、组合与查找顺序
+
+组合让对象持有一个可替换协作者，例如Job使用Repository；继承需要清楚的可替代关系。多继承下属性/方法依MRO查找，super从当前类之后继续，不应简单翻译成“直接父类”。
+
+描述器参与属性获取与设置，普通函数和property都与它有关。先理解本章常见形式，再研究复杂描述器和元类，避免在尚未定义业务不变量时先堆内部机制。
+
+
+
+#### 案例推进：用协议与组合代替无目的的继承
+
+__iter__让对象可遍历，__contains__定义in的含义；需要根据ID查成员时，不必把完整字典比较语义硬套进去。__add__遇到不支持的类型可返回NotImplemented，让语言继续尝试其他运算路径；这不是抛NotImplementedError。
+
+实例持有一个仓储或客户端，是组合；子类承诺可替换父类，是继承。多继承先看__mro__，再解释super的下一步。复杂元类、自定义__getattribute__与__slots__属于深入阅读：__slots__可限制常见实例字段并影响布局，但不自动带来不可变、线程安全或权限控制。
 
 ## 3. 原理讲解与推导
 
-用绑定方法的实例/函数组成、property 的查找优先级和协作继承顺序解释行为。相等、哈希和可变性要一起设计。
+### 3.1 实例与类共同参与属性访问
 
-### 13. self 为什么自动传入：函数与绑定方法
+读取task.name不只是查一个字典：默认查找还考虑类及MRO、描述器和后备逻辑。普通函数放在类里参与绑定方法形成；property作为数据描述器可以优先于同名实例字典项。自定义访问方法可能改变过程，要谨慎处理递归。
 
-【语言协议】存放在类中的普通 Python 函数参与描述器协议。通过实例获取时通常得到绑定方法，里面保存原函数与实例；调用时把实例作为首个参数传入。self 是惯用参数名，不是魔法关键字。
+### 3.2 super表达协作链
+
+多个类遵守兼容签名并继续调用super时，可以沿MRO完成协作；某个节点不继续，后续处理可能消失。显式调用多个父类则可能重复处理共享祖先。这解释了为什么简单组合往往更容易推导。
+
+### 3.3 自动生成方法仍遵循普通对象规则
+
+dataclass没有建立另一套对象系统。其字段默认值、内部引用、相等、哈希和frozen仍需按普通对象语义判断。用实际实例对照，比把“数据类”理解成完整运行时校验容器更准确。
+
+### 3.4 把描述器与MRO放进同一条属性查找路径
+
+在常见实例的默认属性访问中，先沿类的MRO确定相应类属性；若它是数据描述器，优先执行其访问逻辑；否则再考虑实例字典；之后才是非数据描述器或普通类属性。普通查找失败时，若定义了__getattr__，可进入该后备逻辑。自定义__getattribute__、类对象访问以及部分特殊方法查找有额外规则，这条路径不是覆盖所有对象的万能伪代码。
+
+描述器是其类型提供__get__、__set__或__delete__等协议方法的对象。参与读取并定义__set__或__delete__的描述器通常具有数据描述器地位；只有__get__的常见形式属于非数据描述器。property是数据描述器，即使没有setter，同名实例字典项也不会因此覆盖它。普通Python函数是非数据描述器，通过实例读取时形成绑定方法，绑定方法持有原函数与实例。
+
+这解释了两个结果：`obj.method(x)`可以把obj自动交给self，而`obj.__dict__["price"] = 999`不一定能覆盖同名property。前者来自描述器绑定，后者来自查找优先级。仅记“属性先查实例再查类”会同时错过这两个机制。
+
+MRO为多继承提供一致的线性查找顺序，Python采用C3线性化，并要求局部父类顺序等约束相容；无法形成一致顺序的继承结构会在创建类时失败。super并非重新开始查找整个父类树，而是相对当前类与实际实例的MRO继续。E15中的B调用super后可能到C，正是因为实例属于D，其MRO包含D、B、C、A。
+
+### 3.5 机制验证：预测、运行与回看
+
+先读上面的机制，再逐行预测下列实验的结果与副作用。E编号是保留的实验索引，不是章节编号；其中涉及后续协议的细节可在相应章节二次回看。
+
+#### 验证实验 E11
+
+```python
+# experiment: E11
+events = []
+class Resource:
+    def __enter__(self):
+        events.append("enter")
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        events.append("error" if exc_type else "normal")
+        events.append("closed")
+        return False
+try:
+    with Resource():
+        raise ValueError("bad data")
+except ValueError:
+    pass
+assert events == ["enter", "error", "closed"]
+def hides_error():
+    try:
+        raise ValueError("lost")
+    finally:
+        return 1
+assert hides_error() == 1
+```
+
+#### 验证实验 E13
 
 ```python
 # experiment: E13
@@ -35,17 +203,7 @@ assert method.__func__ is Task.label
 assert method("!") == Task.label(task, "!") == "review!"
 ```
 
-staticmethod 不绑定实例，classmethod 绑定访问时相关的类。普通函数对象作为实例属性不自动得到同样的方法绑定；绑定来自属性访问协议。
-
-误区：用 class 保存一个可变 findings 列表，却期待每个实例独立。实例属性应在初始化或 default_factory 中各自建立。
-
-迁移问题：注册的是 task.label 时，注册表实际还间接持有什么对象？这个实例应存活多久？
-
-### 14. property 为何优先：描述器与属性查找
-
-【协议概览】通常实例的默认属性查找会考虑：类/MRO 上的数据描述器、实例字典、非数据描述器或类属性。正常属性查找失败后，若定义了 __getattr__，可进入该后备逻辑。自定义 __getattribute__ 等可以改变过程；类对象和某些特殊方法查找还有其他规则。
-
-property 是数据描述器；没有 setter 的只读 property 也不因此允许同名实例字典条目覆盖它。
+#### 验证实验 E14
 
 ```python
 # experiment: E14
@@ -66,15 +224,7 @@ else:
     raise AssertionError("只读 property 不能直接赋值")
 ```
 
-数据描述器通常由类型定义 __set__ 或 __delete__；只有 __get__ 的描述器属于非数据描述器。普通方法相关的函数描述器属于后者，实例属性可以遮蔽它。
-
-应用：让金额、配置等不变量有明确更新入口；property 提供访问约束，不等于对象无法通过任何内部方式修改。不要把 Python 约定式封装误当安全隔离。
-
-迁移问题：在 __getattribute__ 内再直接读 self.x，为什么可能无限递归？
-
-### 15. super 为什么不等于父类：MRO 与协作
-
-【语言语义】super 从当前类在 MRO 中的位置继续查找；它不只是把代码中的某个父类名代入。协作式多继承要求参与方法的签名与调用约定兼容。
+#### 验证实验 E15
 
 ```python
 # experiment: E15
@@ -99,15 +249,7 @@ assert events == ["D", "B", "C", "A"]
 assert D.__mro__ == (D, B, C, A, object)
 ```
 
-调用类创建实例时，常规流程由元类的调用协议组织，__new__ 建立/返回实例，适用时 __init__ 初始化它；__init__ 不是任意创建对象的唯一入口。理解职责后，日常类先使用简单初始化和组合。
-
-误区：显式调用多个父类初始化可以无条件避免问题；写很多 mixin 就是更高级设计。共享祖先可能被重复处理，复杂链也可能打断协作。
-
-迁移问题：仅让 B 不再调用 super，C/A 的处理为什么可能消失？
-
-### 16. dataclass 为什么不自动验证：代码生成与业务约束
-
-【标准库约定】dataclass 为字段生成初始化、表示、比较等常用方法；具体行为由选项决定。类型标注本身不会自动变成业务验证。frozen 限制常规字段重新赋值，不递归冻结所引用的可变对象。
+#### 验证实验 E16
 
 ```python
 # experiment: E16
@@ -132,9 +274,7 @@ else:
     raise AssertionError("字段中的 list 仍不可哈希")
 ```
 
-相等与哈希必须协调。dataclass 的 eq/frozen/unsafe_hash 影响生成规则，不能只为放进 set 就启用 unsafe_hash。金额对象需要自己验证单位、类型、范围和跨币种操作。
 
-迁移问题：一个 frozen 对象仍包含可变列表，是否适合用作可长期依赖的缓存键？
 
 ## 4. 示例与逐步走查
 
@@ -150,7 +290,9 @@ a.findings.append("missing")
 assert b.findings == []
 ```
 
-阅读时先预测输入、输出、异常、副作用和资源状态，再执行；修改一处条件验证自己的解释。独立示例有标记，框架片段和项目流程另按依赖/服务条件验证。
+### 4.1 沿输入到结果逐步解释
+
+ReviewJob通过default_factory分别创建findings；向a追加missing，只改变a的列表。若把它改成共享类列表，会改变对象图；若改成frozen，内部列表仍不因此递归冻结。
 
 ## 5. 动手练习
 
@@ -168,6 +310,18 @@ assert b.findings == []
 
 再做一个小菱形继承实验，打印 __mro__，解释 super 的下一步。验收：功能来自协议与数据设计，不只写很多同名 Java 风格方法。
 
+### L10：异常与资源关闭（P18–20）
+
+用小型 FakeResource 记录 enter/exit/closed，在 with 内主动抛 ValueError，验证资源关闭且原异常传播。分别使用类协议和 contextmanager 实现。
+
+扩展：第二个资源建立失败时，第一个仍关闭；用 ExitStack 解决。验收：能解释 __exit__ 返回 True 的含义，以及 finally 中 return 为什么可能掩盖异常。
+
+### L11：迭代器协议（P16）
+
+实现只产生 0 到 n-1 的迭代器；空输入立即 StopIteration。再设计一个每次 iter() 返回新迭代器的可迭代集合。
+
+验收：迭代器消费后第二次 list() 为空；可重复迭代集合两次结果相同。不要把迭代状态放在所有实例共享的类变量上。
+
 ## 6. 验收与自测
 
 **行为验收：** 实例状态不串联；跨币种操作拒绝；repr 有调试价值；不靠任意 magic method 堆砌功能。
@@ -175,6 +329,17 @@ assert b.findings == []
 **原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
 
 **提交证据：** 实现位置、运行命令、正常案例、至少一个错误/边界案例、一次失败原因和修复记录。自动检查只证明其覆盖行为；未实现任务不因示例通过而算完成。
+
+### 6.1 先预测，再查看参考推导
+
+两个Report实例为什么不会共享findings？将它改为frozen后，one.findings.append还一定失败吗？
+
+<details>
+<summary>完成预测后查看解释</summary>
+
+工厂在构造默认字段时分别创建列表。frozen主要限制通常的字段重新绑定，列表内部仍可变，所以append可能成功。需要不可变值时，应同时选择不可变字段表示与相应接口。
+
+</details>
 
 ## 7. 面试问答与迁移
 
@@ -184,8 +349,10 @@ property 为什么不只是 Getter？super 为什么可能调用到兄弟类？f
 
 ## 8. 本章小结与参考
 
-先达到行为与原理两类验收，再继续后续依赖本章的任务。遇到不熟悉的内容回到例子做小实验，不以阅读完成代替掌握。
+本章让对象以状态、不变量与协议参与程序。下一章组织模块与文件入口，使函数和类能够被导入、复用与序列化。
 
 官方参考：[本章资料](https://docs.python.org/zh-cn/3.12/tutorial/)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
+
+原理对照：[描述器与实例属性查找](https://docs.python.org/3.12/howto/descriptor.html#invocation-from-an-instance)、[数据模型与特殊方法](https://docs.python.org/3.12/reference/datamodel.html)。先对照E13/E14，再阅读查找伪代码。
 
 [上一章](05-iteration-resources.md) · [下一章](07-modules-files.md)
