@@ -1,8 +1,12 @@
 # Python → AI 应用：可练习教程
 
+当前主教材已统一为 [五卷30章教材](../python-book/README.md)，包含基础、原理、练习、项目与面试。本目录20课作为历史案例与扩展来源保留，日常按主教材阅读。
+
 适用对象：有 Java 后端基础，正在学习 Python，希望开发 AI 应用的你。教程以当前订单项目为主线，按四个主题阶段、20 课组织。这里的“周”代表主题，一课可以分成 1–3 次学习，不要求四个自然周学完。
 
-长期执行参照 [16 周项目主线](../learning-plan/enterprise-ai-16-weeks.md)，基础需要展开时使用 [8 周学习过程](../learning-plan/study-process.md)，两者不同时推进。官方教程为阅读主线，Python-100-Days 为补充练习，本文和 practice 目录为配套教材。下表的四个“周”是原来的主题标签，文件名不代表长期主线的日历周数。
+当前执行参照 [Python 系统学习主线](../learning-plan/python-systematic.md)，并配合 [24 个专项练习](python-language-labs.md)。完成语言与工程验收后，再从 [AI 项目路线 W04](../learning-plan/enterprise-ai-16-weeks.md)继续。本文 20 课和 practice 目录保留为配套案例；下表的四个“周”是原来的主题标签，文件名不代表新日程的周数。
+
+每次阅读还配合 [Python 原理讲义](../python-principles/README.md)：包含对象/执行、作用域、协议、资源、导入、数据边界与并发机制，以及 24 个可独立运行的验证实验。
 
 ## 从哪里开始
 

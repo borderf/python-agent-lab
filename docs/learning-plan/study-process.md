@@ -1,6 +1,6 @@
 # Python → AI Agent：8 周学习过程
 
-本文件保留为基础阶段的展开日程。长期项目执行以 [16 周 DocPilot / ProcureAgent 主线](enterprise-ai-16-weeks.md) 为准；Python 基础验收有缺口时使用本日程补齐，不同时执行两套周计划。[20 课教程](../tutorial/README.md) 提供原理、起始代码和检查。
+本文件保留为历史的快速衔接方案。当前以 [Python 系统学习主线](python-systematic.md) 为准，完成后再进入 [DocPilot / ProcureAgent 项目](enterprise-ai-16-weeks.md)。不同时执行多套周计划。[20 课教程](../tutorial/README.md) 提供可复用案例和检查。
 
 ## 目标与节奏
 
