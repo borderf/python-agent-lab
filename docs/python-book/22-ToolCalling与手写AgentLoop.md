@@ -87,6 +87,63 @@ assert calls == ["S1"]
 
 ReAct类思路强调行动与观察反馈，工程中记录可审核的决策和证据即可，不需要把不可验证的内部推理叙述当作执行凭证。
 
+### 2.6 上下文预算与工具调用标识：循环的两条数据契约
+
+多轮Agent会积累指令、用户问题、历史、检索块与工具返回。全部拼接可能超过窗口，随意截断又可能丢掉任务条件或证据。先确定必须保留什么，再把有限预算分给可选材料；实际计数使用对应模型/服务规则，还要预留输出与协议开销。
+
+下面故意使用字符数演示装箱算法，不是token计数器，也不能用于计费。预算放不下必要约束时明确失败，不悄悄删除约束后继续执行。
+
+```python
+# study-example: S22B
+def pack_context(required, candidates, budget):
+    if type(budget) is not int or budget < 0:
+        raise ValueError("budget必须为非负整数")
+    used = sum(len(text) for text in required)
+    if used > budget:
+        raise ValueError("必要内容超出预算")
+    selected = list(required)
+    for text in candidates:
+        if used + len(text) <= budget:
+            selected.append(text)
+            used += len(text)
+    return selected
+assert pack_context(["规则", "问题"], ["证据A", "很长的历史记录"], 7) == ["规则", "问题", "证据A"]
+try:
+    pack_context(["必要规则"], [], 1)
+except ValueError:
+    pass
+else:
+    raise AssertionError("不能丢掉必要规则后继续")
+```
+
+required包含当前可信约束与任务，并不使任意用户文本都获得系统权威。candidates也不能仅凭短就优先，要按证据相关性、来源、版本、去重与完整性排序；切掉表格条件或否定句可能改变事实。摘要只缩减表示，不提高可信度，引用ID与原始来源应能找回。
+
+多个工具结果还必须严格对应调用。返回顺序可能不同于请求顺序，使用call_id关联，而不是默认第一个结果属于第一个工具。
+
+```python
+# study-example: S22C
+def correlate(requests, results):
+    wanted = [request["call_id"] for request in requests]
+    received = [result["call_id"] for result in results]
+    if len(set(wanted)) != len(wanted) or len(set(received)) != len(received):
+        raise ValueError("调用标识重复")
+    if set(wanted) != set(received):
+        raise ValueError("结果缺失或出现未知调用")
+    by_id = {result["call_id"]:result for result in results}
+    return [by_id[call_id] for call_id in wanted]
+requests = [{"call_id":"C1"}, {"call_id":"C2"}]
+results = [{"call_id":"C2","value":20}, {"call_id":"C1","value":10}]
+assert [r["value"] for r in correlate(requests, results)] == [10, 20]
+try:
+    correlate(requests, results[:1])
+except ValueError:
+    pass
+else:
+    raise AssertionError("缺失结果不能默认为成功")
+```
+
+例子验证集合与顺序关系，尚需验证每条请求/结果Schema与业务名称。并行工具还要评估依赖、写入顺序、取消和局部失败；供应商协议可能要求保留特定助手消息和工具结果形式，适配层按实际契约转换。最终回答中的来源ID仅能来自本次已授权观察，不接受凭空新增引用。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 模型决策与执行控制分离
@@ -130,6 +187,10 @@ ReAct类思路强调行动与观察反馈，工程中记录可审核的决策和
 ### 练习三：有界失败
 
 分别提供永远请求工具、反复坏参数、工具超时与无资料的假模型/工具。达到步骤或总预算后明确停止，保留轨迹，缺资料交复核。再在同题集比较固定流程与单Agent，判断模型决策是否带来实际收益。
+
+### 补强练习：从本节示例迁移
+
+给pack_context加入真实计数器注入点、输出预留和完整证据单元策略。对correlate测试重复ID、未知ID、缺结果与乱序，并验证业务函数执行结果确实进入下一轮消息。
 
 ## 6. 验收与自测
 

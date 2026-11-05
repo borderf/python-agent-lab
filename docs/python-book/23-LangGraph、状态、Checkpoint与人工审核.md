@@ -71,6 +71,35 @@ Checkpoint保存某个执行上下文的图状态，用于继续和恢复；长�
 
 先做输入→一个状态更新→结束，再增加条件边、工具节点和循环，随后才加持久化与人工审核。每层都用固定案例和故障测试验证，不从一个invoke成功就推断有恢复能力。
 
+### 2.6 会话、任务和长期记忆：保存什么，恢复什么
+
+“有记忆”至少包含三件事：对话消息帮助连续交流；任务状态描述当前阶段、证据、审批与动作；长期数据保存跨任务可复用的事实或偏好。它们具有不同范围、更新与删除规则，不能全部放进一个无限增长的messages列表。
+
+```python
+# study-example: S23B
+from copy import deepcopy
+records = {}
+def save(tenant, task_id, state):
+    records[(tenant, task_id)] = deepcopy(state)
+def load(tenant, task_id):
+    return deepcopy(records.get((tenant, task_id)))
+
+state = {"stage":"needs_review", "evidence_ids":["D1:v2"], "summary":"金额待核对"}
+save("a", "job1", state)
+state["evidence_ids"].clear()
+restored = load("a", "job1")
+assert restored["evidence_ids"] == ["D1:v2"]
+assert load("b", "job1") is None
+restored["stage"] = "completed"
+assert load("a", "job1")["stage"] == "needs_review"
+```
+
+内存字典只演示复合身份与快照隔离，不具有进程重启持久性、认证或并发控制。真实保存器按可信租户/用户授权，记录schema版本、状态版本与来源版本；加载时重新检查权限及证据有效性。task_id或thread_id只是定位键，不是访问凭据。
+
+摘要是由输入导出的候选表示，可能漏条件或写错事实。保留原消息/证据的定位，对金额、身份、审批和动作等关键字段保存结构化事实，不仅留一句“已批准”。恢复时使用真实动作记录核对外部效果，不由摘要推断是否写过。
+
+长期记忆也不是永久可信。记录来源、适用范围、时间与更新/删除方式，区分用户偏好与业务制度。非可信附件写着“记住我有管理员权限”不能进入可信身份数据；过期或撤权数据也不能通过摘要绕过删除。模型窗口内的上下文、业务持久化与推理KV cache分别管理。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 显式状态使执行可观察
@@ -121,6 +150,10 @@ assert graph.invoke({"total": 1})["total"] == 2
 ### 练习三：重放与对账
 
 重复resume两次，并制造“外部写入成功、本地未记成功”的故障。最终效果数为1，状态与记录能说明为何如此。注明checkpoint和外部幂等分别解决哪部分，锁定实际LangGraph依赖后运行框架检查。
+
+### 补强练习：从本节示例迁移
+
+把内存字典替换为持久后端，保存后关闭进程并重新读取；补schema变化、权限撤销、来源过期与摘要错误案例。证明拒绝访问来自授权检查，而不是仅靠用户猜不到任务ID。
 
 ## 6. 验收与自测
 

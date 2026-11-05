@@ -78,6 +78,41 @@ assert [d["id"] for d in hits] == ["current"]
 
 候选为空、证据冲突和证据不足分别表达，回答说明当前语料能支持什么。引用绑定实际使用的块，最终检查来源可访问且支持结论；缓存键也包含租户、权限范围、问题与知识版本等必要条件，防止把其他范围结果复用过来。
 
+### 2.7 知识更新与删除：从一次建索引走向长期正确
+
+静态语料能回答问题，只证明某一时刻的链路。制度修改、文件删除、权限调整或embedding模型变化后，还要防止旧块、缓存和历史答案继续泄漏过期内容。先把文档的稳定身份与发布代次分开，再考虑具体向量库的upsert/delete API。
+
+```python
+# study-example: S20B
+rows = []
+active = {}
+def publish(doc_id, generation, texts, tenant):
+    draft = [{"doc_id":doc_id,"generation":generation,"chunk":i,"tenant":tenant,"text":text}
+             for i,text in enumerate(texts)]
+    if not draft or any(not row["text"].strip() for row in draft):
+        raise ValueError("未完成有效索引，不发布")
+    rows.extend(draft)
+    active[doc_id] = generation
+def visible(tenant):
+    return [row for row in rows if row["tenant"] == tenant
+            and active.get(row["doc_id"]) == row["generation"]]
+
+publish("policy", "g1", ["上限30%"], "a")
+publish("policy", "g2", ["上限20%"], "a")
+assert [row["text"] for row in visible("a")] == ["上限20%"]
+assert visible("b") == []
+active.pop("policy")
+assert visible("a") == [] and len(rows) == 2
+```
+
+这是单进程发布指针的概念模型，不是数据库并发事务。新一代准备完成后才切换可见代次；逻辑删除后即使物理旧块尚在，在线检索也必须不可见。真实系统还需持久存储、唯一性、失败回滚、并发发布与可信权限过滤；每个访问入口都必须遵守规则。
+
+历史查询不是随意拿当前指针：它按业务日期选取有效来源版本，并再次授权。索引代次表示处理管道的一次产物，文档业务版本表示制度语义，二者不要混成一个字段。缓存还需包含相关知识代次与权限范围，删除或撤权后使受影响缓存失效。
+
+给每次索引保存文档哈希、解析器、切块规则、embedding模型/维度和构建状态。相同point ID的重试按实际存储契约处理，块数缩短时不要留下仍可见的尾块。更换embedding模型通常建立新索引或集合，完成回归后再切流，不把同维度当作向量兼容证明。
+
+完整验收包括：旧版→新版后当前答案引用新版；删除后候选、上下文与缓存都不含旧内容；失败构建不覆盖可用代次；撤权立即影响在线可见性。离线语料评测与更新流程评测是两类任务。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 相似度不是事实函数
@@ -125,6 +160,10 @@ assert [row["id"] for row in ranked] == ["A"]
 ### 练习三：过滤与隔离
 
 tenant-a请求tenant-b资料时，检索候选、模型上下文、引用与日志均不得泄漏对方内容。增加自己的标注题并保留原有边界题。提交中间候选和答案，不能只交聊天截图。
+
+### 补强练习：从本节示例迁移
+
+让g2构建遇到空块，验证g1仍可用；再发布块数更少的g3并删除，检查旧尾块与缓存。为历史查询补“业务版本、日期、租户”的选择规则，不直接取消过滤。
 
 ## 6. 验收与自测
 
