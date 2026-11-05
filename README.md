@@ -2,27 +2,33 @@
 
 一个以项目练习为主的 Python 学习仓库，记录从 Java 后端开发到 AI 应用开发的学习过程。
 
-## 当前进度
+## 学习入口
 
-当前阶段：Python 基础与集合操作。现有练习围绕订单筛选、统计、分组、排序和去重。
-
-## 当前学习入口
-
-- [教材总目录：Python、项目工程与 AI 开发，五卷30章](docs/python-book/README.md)
-- [教材导读：章节结构、运行方法与学习验收](docs/python-book/00-guide.md)
-- [配套日程：系统掌握 Python，12 个主题周 / 60 次任务](docs/learning-plan/python-systematic.md)
-- [Python 能力检查表与阶段验收](docs/learning-plan/python-competencies.md)
+- [教材总目录：Python、项目工程与 AI 开发，五卷30章](docs/python-book/教材目录.md)
+- [教材导读：章节结构、运行方法与学习验收](docs/python-book/00-导读与学习方法.md)
+- [知识覆盖与阅读层次](docs/python-book/附录A-知识覆盖与阅读层次.md)
+- [语言练习任务索引：P01–P60](docs/python-book/附录B-语言练习任务索引.md)
+- [Python 能力检查表与阶段验收](docs/python-book/附录C-Python能力检查表.md)
+- [学习记录模板](docs/python-book/附录D-学习记录模板.md)
 
 ## 配套案例与后续项目
 
-- [原理索引：内容已嵌入教材对应章](docs/python-principles/README.md)
-- [专项练习索引：内容已嵌入教材对应章](docs/tutorial/python-language-labs.md)
-- [后续 AI 项目：Python 验收后从 W04 继续](docs/learning-plan/enterprise-ai-16-weeks.md)
-- [项目实践规格：接口、工具、状态与审批](docs/project-practice/projects.md)
-- [历史快速衔接日程：Python → AI Agent，8 周](docs/learning-plan/study-process.md)
-- [Python → AI 应用：20 课可练习教程](docs/tutorial/README.md)
-- [后续学习路线：从订单分析到 AI 应用](docs/learning-plan/roadmap.md)
-- [第一周：Python 集合操作与订单分析](docs/learning-plan/week-01.md)
+- [订单、HTTP、服务与Agent起始练习及验收命令](practice/python_ai_course/练习说明.md)
+- [DocPilot / ProcureAgent虚构数据说明](practice/enterprise_ai/虚构数据说明.md)
+- [项目里程碑与交付检查](docs/python-book/附录E-项目里程碑与交付检查.md)
+- [项目实践规格：接口、工具、状态与审批](docs/project-practice/项目实践规格.md)
+- [项目评测与故障演练](docs/project-practice/评测与故障演练.md)
+
+按教材章节顺序学习；附录任务用于对照验收，项目规格用于实现细节。旧版教程、独立原理讲义和重复周计划已合并清理。
+
+## 每天怎样学习
+
+先在教材导读中看[学习方法与实操位置](docs/python-book/00-导读与学习方法.md#先看哪里代码写在哪里)。采用“读一个小节→预测运行→修改条件→独立练习→检查验收→记录复习”的流程。
+
+- 小型语法与原理实验放在[章节实验区](practice/chapter_labs/练习说明.md)。
+- 配套TODO写在practice/python_ai_course；已完成的业务函数从src复用。
+- 正式项目实现放在src/python_agent_lab，测试放在tests。
+- 所有命令从本仓库根目录执行；先确认检查导入的是哪份实现。
 
 ## 常用命令
 

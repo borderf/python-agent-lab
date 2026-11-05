@@ -92,7 +92,9 @@ def verify(static_only: bool) -> dict:
                 json.loads(code)
             except ValueError as exc:
                 failures.append(f"{path.name}: JSON {exc}")
-    for path in BOOK.glob("*.md"):
+    markdown_files = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md")),
+                      *sorted((ROOT / "practice").rglob("*.md"))]
+    for path in markdown_files:
         prose = re.sub(r"```.*?```", "", path.read_text(encoding="utf-8"), flags=re.S)
         prose = re.sub(r"`[^`\n]*`", "", prose)
         for target in re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", prose):

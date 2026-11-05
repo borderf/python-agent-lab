@@ -1,1 +1,1 @@
-"""配合 docs/tutorial 使用的练习起始代码。"""
+"""配合 docs/python-book 使用的练习起始代码。"""

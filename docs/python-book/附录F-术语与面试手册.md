@@ -1,0 +1,113 @@
+# 附录：术语、36张面试卡与进阶方向
+
+[全书目录](教材目录.md)
+
+## 常用术语
+
+| 术语 | 本书中的含义 |
+| --- | --- |
+| 绑定/身份/相等 | 名称引用对象 / 同一对象 / 依据比较协议相等 |
+| 可迭代对象/迭代器 | 能提供迭代过程 / 持有消费状态的对象 |
+| 闭包 | 内部函数保留访问外层绑定的能力 |
+| 描述器 | 参与属性访问的协议对象，方法绑定与property与之相关 |
+| 契约 | 输入、输出、异常、副作用、资源与权限等共同约定 |
+| Schema | 结构/类型约束，不能自动证明业务事实正确 |
+| 幂等 | 相同约定操作重复执行不增加额外业务效果 |
+| Token/Embedding | 模型离散处理单元 / 表示对象的向量 |
+| 上下文/记忆/Checkpoint | 当次模型输入 / 应用保存的历史或事实 / 执行状态快照 |
+| RAG/Rerank | 取外部证据后生成 / 对候选重新排序 |
+| Tool Calling | 模型产生工具请求，由程序决定是否与怎样执行 |
+| Agent Loop/Harness | 调用-执行-观察循环 / 执行约束、资源、状态和错误管理 |
+| MCP/编排 | 能力交互协议 / 应用控制步骤与状态的组织 |
+| Trace/Eval | 一次执行轨迹 / 按固定规则验证行为与质量 |
+
+## 36张面试卡
+
+每张卡先90秒回答，再用反例或项目证据展开。要点是答案骨架，不是背诵稿。
+
+| # | 问题 | 答题要点与追问 |
+| --- | --- | --- |
+| 01 | Python赋值会复制吗？ | 名称绑定；原地修改与重绑定；追问嵌套浅复制 |
+| 02 | is/==如何选择？ | 身份与比较协议；None用身份；不依赖整数缓存 |
+| 03 | 默认参数为什么共享？ | 定义时求值；同一默认对象；None/哨兵/工厂的适用情况 |
+| 04 | 闭包为什么读到最后一个值？ | 自由变量查找时机；默认绑定与工厂；可变对象仍可能共享 |
+| 05 | 装饰器执行顺序是什么？ | 定义阶段包装与调用阶段进入；wraps不保证业务正确 |
+| 06 | 生成器和列表有何差别？ | 保存状态、一次性消费、惰性；不是永远更快；提前停止资源 |
+| 07 | with怎样处理错误？ | 进入成功后退出；抑制异常的返回值；资源建立中途失败 |
+| 08 | property为什么能控制访问？ | 描述器与默认属性查找；不是安全隔离机制 |
+| 09 | super为什么可能到兄弟类？ | MRO继续查找；协作签名；显式父类调用的重复风险 |
+| 10 | dataclass frozen一定可哈希吗？ | 生成规则与字段可哈希性；不是递归冻结 |
+| 11 | 类型标注为何没拦住错误参数？ | 静态描述、运行时校验、业务事实分工；Any与object |
+| 12 | import为何可能出循环错误？ | 缓存与部分初始化；依赖方向、共享契约与入口副作用 |
+| 13 | 同步/异步/线程/进程怎么选？ | 等待与CPU负载、阻塞库、数据传输、取消和资源 |
+| 14 | gather和TaskGroup如何处理失败？ | 常见异常传播与兄弟任务清理差异；异常组；特殊退出规则 |
+| 15 | HTTP超时能说明什么？ | 没收到结果不等于无业务效果；分项/总体时限；幂等重试 |
+| 16 | Pydantic和TypedDict如何分工？ | 外部解析验证与静态结构；严格/转换模式；仍需业务约束 |
+| 17 | mock如何产生假通过？ | 替换真实边界，不替换待验证规则；与集成测试配合 |
+| 18 | FastAPI依赖有什么价值？ | 身份/仓储/客户端边界、资源和替换测试；不等于授权自动正确 |
+| 19 | 幂等与事务有什么区别？ | 重复效果与存储原子范围；外部写入与本地记录的失败窗口 |
+| 20 | 如何证明工程可复现？ | 依赖锁、环境、构建包、非源码目录、样例和故障命令 |
+| 21 | Transformer最基本机制是什么？ | 表示、注意力匹配、加权组合、位置/残差等；区分示意与完整模型 |
+| 22 | RAG与微调怎样选择？ | 外部证据更新与参数行为调整；事实/风格/成本/数据条件分别考虑 |
+| 23 | JSON正确为什么还会错？ | 语法、Schema、业务不变量、证据与权限逐层检查 |
+| 24 | RAG答案错误怎样定位？ | 解析/入库、召回、排序、版本、生成忠实性分别看 |
+| 25 | Hybrid与Rerank各做什么？ | 多路候选融合与候选重排；分数尺度；重排补不了漏召回 |
+| 26 | Recall@K高为什么仍不够？ | 粒度/分母与无答案分组；引用支持性和生成正确性另测 |
+| 27 | Tool Calling是否让模型直接执行？ | 模型请求、程序校验授权、实际执行和结果回传 |
+| 28 | 为什么用LangGraph？ | 显式状态与路由/恢复；与手写基线比较；仍有业务一致性问题 |
+| 29 | Checkpoint等于一次写入吗？ | 恢复可能重进节点；独立审批、幂等、动作账本与对账 |
+| 30 | MCP与REST/Agent区别？ | 协议互通、业务接口、决策编排不同层；服务端授权 |
+| 31 | Multi-Agent何时值得采用？ | 独立子任务/上下文差异、结构化合并；质量成本延迟受控比较 |
+| 32 | LLM评测与安全怎么做？ | 固定/保留集、人工标签、失败注入、越权零泄漏、版本与脱敏轨迹 |
+| 33 | 如何介绍DocPilot？ | 需求/基线/证据链/实际改进/代价，给可复现数据 |
+| 34 | 如何介绍ProcureAgent？ | 工具选择、真实规则、状态恢复、审批与故障窗口 |
+| 35 | Java经验怎样迁移？ | 接口、事务、权限、测试运维仍适用；补Python机制与概率系统边界 |
+| 36 | 遇到没做过的技术怎么办？ | 明确已做/理解/待验证；给试验计划，不捏造生产经历 |
+
+## 三轮模拟面试
+
+**第一轮：语言与代码，45–60分钟。** 随机抽两道机制题，做订单去重/金额/资源管理题，追加错误输入和性能条件。检查解释是否与代码一致。
+
+**第二轮：工程调试，45–60分钟。** 给“接口偶发超时且重复写入”场景，先收集日志/trace/动作记录，再判断重试、幂等与恢复。不要未定位就换框架。
+
+**第三轮：AI系统设计，60分钟。** 设计有版本与权限的企业文档审查系统。明确用户、数据、更新、质量、时限和读写边界，再选择RAG、Agent、状态与部署；最后说明最小版本和扩展条件。
+
+每轮记录清楚、正确、证据、取舍四项，不用主观总分代替具体缺口。
+
+## 版本记录模板
+
+```text
+日期、代码版本、解释器/构建、依赖锁：
+模型/服务、提示/工具Schema、embedding/分块/索引版本：
+数据来源、业务日期、权限范围、评测集/验证集：
+运行/失败复现命令、结果、成本/耗时口径：
+已知限制、未验证平台、下次改进：
+```
+
+不要机械追求“最新”。理解机制、锁定可复现版本，再按官方变更说明升级并跑回归。本书核对入口不等于替你验证所有最新依赖组合。
+
+## 按岗位选择的进阶方向
+
+| 方向 | 需要补的内容 | 适合何时加入 |
+| --- | --- | --- |
+| 模型训练/微调 | 概率统计、线性代数、梯度/优化、PyTorch、数据集、SFT/LoRA、训练评估 | 目标岗位要求训练，且有数据/算力后 |
+| 推理部署/优化 | 显存、批处理、KV cache、量化、吞吐/延迟、模型服务 | 需要私有模型和实际容量目标时 |
+| 深入检索 | 索引结构、多模态/表格检索、困难负样本、检索训练 | 基础评测已暴露明确召回问题时 |
+| 长期Agent执行 | 持久工作流、任务队列、调度、故障恢复、复杂人工流程 | 单任务恢复已验证且业务需要长期执行时 |
+| 高级协作 | 动态委派、跨系统协议、隔离执行与复杂共享状态 | 单Agent基线与协作收益明确后 |
+| 生产治理 | 鉴权审计、数据生命周期、容量、监控、灾备、安全检查 | 准备真实用户和真实数据前 |
+
+扩展方向需要各自的教材和实验，本书不把读过概念等同训练或运维经验。
+
+## 主要官方入口
+
+- [Python教程](https://docs.python.org/zh-cn/3.12/tutorial/)、[执行模型](https://docs.python.org/3.12/reference/executionmodel.html)、[描述器](https://docs.python.org/3.12/howto/descriptor.html)
+- [uv](https://docs.astral.sh/uv/guides/projects/)、[pytest](https://docs.pytest.org/en/stable/)、[HTTPX](https://www.python-httpx.org/quickstart/)
+- [Pydantic](https://docs.pydantic.dev/latest/concepts/models/)、[FastAPI](https://fastapi.tiangolo.com/tutorial/)
+- [Hugging Face LLM课程](https://huggingface.co/learn/llm-course/chapter1/1)、[Ollama Chat](https://docs.ollama.com/api/chat)
+- [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview)、[MCP](https://modelcontextprotocol.io/docs/learn/architecture)、[Qdrant](https://qdrant.tech/documentation/)
+- [Langfuse评测](https://langfuse.com/docs/evaluation/overview)、[Hello-Agents](https://github.com/datawhalechina/hello-agents)
+
+各来源按对应章节查阅，示例与练习主要来自本仓库自有材料和新编案例，不要求把全部外部课程再次从头学习。
+
+本轮补充核对：[Python控制流与函数](https://docs.python.org/3.12/tutorial/controlflow.html)、[Pydantic严格模式](https://pydantic.dev/docs/validation/latest/concepts/strict_mode/)、[HTTPX分项超时](https://www.python-httpx.org/advanced/timeouts/)、[uv锁定与同步](https://docs.astral.sh/uv/concepts/projects/sync/)、[LangGraph持久化](https://docs.langchain.com/oss/python/langgraph/persistence)、[MCP架构](https://modelcontextprotocol.io/docs/learn/architecture)、[BM25相似度](https://www.elastic.co/docs/reference/elasticsearch/index-settings/similarity)、[LoRA原理](https://huggingface.co/docs/peft/main/en/conceptual_guides/lora)。LoRA链接为main概念文档，安装与训练应选择实际稳定版本；本书未据此安装开发版。

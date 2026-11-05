@@ -21,7 +21,7 @@ def main() -> None:
 
     print("\n第一周练习只需标准库和 pytest；其余库到对应章节再安装。")
     print("准备检查完成；TODO 实现和课程验收仍需要你完成。")
-    print("先阅读 docs/tutorial/01-python-orders.md，完成第 01 课。")
+    print("先阅读 docs/python-book/教材目录.md，按章节学习；练习契约见 practice/python_ai_course/练习说明.md。")
 
 
 if __name__ == "__main__":

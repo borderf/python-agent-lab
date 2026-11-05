@@ -1,4 +1,4 @@
-"""第 01–05 课：在 TODO 处实现；业务规则见 docs/tutorial/README.md。"""
+"""练习01–05：在TODO处实现；业务规则见 practice/python_ai_course/练习说明.md。"""
 
 from pathlib import Path
 from typing import Literal, TypedDict
