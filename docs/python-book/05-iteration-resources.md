@@ -16,8 +16,6 @@
 
 这一区别影响接口：接受Iterable不意味着能len，也不意味着能遍历两次。需要反复读取时可以保存为列表，但要接受额外内存代价；一次性流应按一次遍历设计。
 
-
-
 #### 案例推进：用三个观察点看见惰性
 
 ```python
@@ -38,6 +36,25 @@ assert list(stream) == []
 
 调用生成器函数先获得生成器对象，第一次推进才进入函数体。yield返回一项并暂停，局部执行状态保留，下一次从暂停点继续。list会消费到结束，消费完再list不是重新执行。这解释了为什么“接受任意Iterable”的函数不能未经说明遍历两次。
 
+#### iter与next是for背后的消费接口
+
+```python
+# study-example: S05D
+values = iter([10, 20])
+assert iter(values) is values
+assert next(values) == 10
+assert next(values) == 20
+assert next(values, "END") == "END"
+def combined():
+    yield from [1, 2]
+    yield 3
+assert list(combined()) == [1, 2, 3]
+```
+
+next的默认值用于迭代结束；没有默认值时结束由StopIteration表达。yield from把子迭代过程委托出去，不需要自己写一层for再yield。迭代器具有消费状态，生成器是其中一种实现；容器可以产生多个独立迭代器，不能把三个概念互换。
+
+异常还可以用自定义Exception子类表达调用方需要区分的领域失败。add_note为异常补充上下文，raise from表达明确原因，bare raise保留当前失败。异常组与except*放到第11章任务失败后再学习。
+
 ### 2.2 yield怎样产生惰性过程
 
 含yield的函数调用通常返回生成器，函数体在被推进时才运行到下一个暂停点。局部状态保留在暂停过程中，下一次next继续执行。return结束，yield from委托子迭代过程。生成器表达式是紧凑写法，但同样不是可重复的惰性列表。
@@ -53,8 +70,6 @@ assert list(values) == []
 ```
 
 惰性意味着错误也可能推迟到消费时出现。文件已经打开多久、某行已经解析没有，都需要沿消费过程观察。
-
-
 
 #### 案例推进：错误可能发生在创建之后
 
@@ -96,8 +111,6 @@ __exit__返回真值会抑制块内异常，不只是表示清理成功。进入
 ### 2.5 提前停止也是正常需求
 
 调用方可能只读第一条、遇到条件break，或者客户端断开。break不普遍等于close。流接口要说明资源由谁拥有、消费结束或提前停止时怎样关闭。把这些路径加入测试，才能避免“完整读完没问题，线上只读一部分就泄漏”。
-
-
 
 #### 案例推进：提前退出要有明确的关闭动作
 
@@ -188,7 +201,63 @@ with closing(stream()) as managed:
 assert events == ["opened", "closed"]
 ```
 
+#### 验证实验 E02
 
+```python
+# experiment: E02
+from copy import deepcopy
+a = [{"tags": []}]
+alias = a
+shallow = a.copy()
+deep = deepcopy(a)
+assert alias is a and shallow is not a
+a[0]["tags"].append("paid")
+assert shallow == [{"tags": ["paid"]}]
+assert deep == [{"tags": []}]
+alias = []
+assert a == [{"tags": ["paid"]}]
+t = ([],)
+try:
+    t[0] += [1]
+except TypeError:
+    pass
+else:
+    raise AssertionError("tuple 的槽位不能重新赋值")
+assert t == ([1],)  # 内部列表先完成了原地修改，之后写回槽位失败
+```
+
+#### 学完异常后回看装饰器退出路径
+
+第四章先实现成功路径的包装；现在用E09观察finally如何保证退出事件，异常怎样继续传播。
+
+#### 验证实验 E09
+
+```python
+# experiment: E09
+from functools import wraps
+events = []
+def decorate(label):
+    events.append("build:" + label)
+    def apply(fn):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            events.append("enter:" + label)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                events.append("exit:" + label)
+        return wrapped
+    return apply
+@decorate("outer")
+@decorate("inner")
+def add(a, b):
+    """加法示例。"""
+    return a + b
+assert events == ["build:outer", "build:inner"]
+assert add(1, 2) == 3
+assert events[2:] == ["enter:outer", "enter:inner", "exit:inner", "exit:outer"]
+assert add.__name__ == "add" and add.__wrapped__.__name__ == "add"
+```
 
 ## 4. 示例与逐步走查
 
@@ -214,13 +283,11 @@ session进入时记录open，yield把列表交给块体；块体追加work；离
 
 ## 5. 动手练习
 
-先用生成器完成惰性消费，练习try/except/else/finally与已有上下文管理器。JSONL题在第7章文件知识讲完后完整验收；自定义类迭代器L11和类上下文管理器L10移至第6章。
+先完成下面三步，再进入下一章。JSONL完整题L12已放在第7章；自定义类迭代器L11和类上下文管理器L10放在第6章。
 
-### L12：惰性 JSONL（P17–20）
-
-实现逐行解析器：跳过空行，对记录做订单校验，失败带 1 起始的物理行号和原因。第一行合法、第二行空、第三行坏 JSON 时，只取第一条不应提前触发第三行错误，继续消费才报第 3 行错误。
-
-验收：不 read 全文件后再假装生成器；调用方提前停止时有明确 close/context 管理方式。正常结束和异常均关闭文件。
+1. 写一个产生0到n-1的生成器，n=0立即结束；只取第一项后再list，验证剩余结果。
+2. 将数字解析案例改成遇空行跳过，输入第一项10、第二项空白、第三项bad；继续消费时报真实位置。
+3. 为生成器加入finally事件，分别测试完整消费、主动close和with提前退出，说明break本身没有保证什么。
 
 ## 6. 验收与自测
 

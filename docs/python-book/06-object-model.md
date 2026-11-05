@@ -25,8 +25,6 @@ class Job:
 
 创建两个Job不应让一个任务的发现混进另一个。是否用类，取决于是否需要维持状态、封装不变量或实现协议；单纯计算常可用函数完成。
 
-
-
 #### 案例推进：从两份独立状态开始
 
 ```python
@@ -56,8 +54,6 @@ assert "count=1" in repr(a)
 通过实例访问普通方法时，通常得到绑定了实例的方法；classmethod绑定类，适合按类构造或处理类相关行为；staticmethod不自动绑定实例，可以表达放在类命名空间内的独立操作。
 
 property把属性读取或更新接到受控代码上，让调用方保持`item.price`形式。它适合维护不变量，不能当作安全隔离。若只读property内部仍引用可变对象，调用方可能通过该对象修改状态。
-
-
 
 #### 案例推进：再建立受控属性与构造入口
 
@@ -93,8 +89,6 @@ dataclass可以生成初始化、repr和比较等方法；用field(default_facto
 
 值对象的相等和哈希要一致。一个可变对象是否适合放入set或作为dict键，不能仅通过开启unsafe_hash解决；先问影响相等的状态会不会改变。
 
-
-
 #### 案例推进：数据类减少重复，规则仍需自己写
 
 ```python
@@ -124,8 +118,6 @@ __repr__服务调试，__str__服务可读展示；__len__、__iter__、__contai
 组合让对象持有一个可替换协作者，例如Job使用Repository；继承需要清楚的可替代关系。多继承下属性/方法依MRO查找，super从当前类之后继续，不应简单翻译成“直接父类”。
 
 描述器参与属性获取与设置，普通函数和property都与它有关。先理解本章常见形式，再研究复杂描述器和元类，避免在尚未定义业务不变量时先堆内部机制。
-
-
 
 #### 案例推进：用协议与组合代替无目的的继承
 
@@ -274,7 +266,27 @@ else:
     raise AssertionError("字段中的 list 仍不可哈希")
 ```
 
+#### 验证实验 E06
 
+```python
+# experiment: E06
+class Key:
+    def __init__(self, value):
+        self.value = value
+    def __hash__(self):
+        return 1  # 故意碰撞，只用于实验
+    def __eq__(self, other):
+        if not isinstance(other, Key):
+            return NotImplemented
+        return self.value == other.value
+table = {Key("A"): 10, Key("B"): 20}
+assert len(table) == 2 and table[Key("A")] == 10
+flags = {True: "first", 1: "second"}
+assert len(flags) == 1 and flags[True] == "second"
+ordered = {"B": 2, "A": 1}
+ordered["B"] = 3
+assert list(ordered) == ["B", "A"]
+```
 
 ## 4. 示例与逐步走查
 

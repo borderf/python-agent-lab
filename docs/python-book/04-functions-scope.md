@@ -24,8 +24,6 @@ assert amount == 125
 
 left/right是本次调用的局部名称，绑定到调用方提供的对象。局部名称重新赋值与修改可变参数不同；是否允许修改输入是接口的一部分。
 
-
-
 #### 案例推进：先得到一个能组合的返回值
 
 ```python
@@ -52,8 +50,6 @@ assert paid_total([]) == 0
 
 默认值在执行def时求值。用列表作默认值可能跨调用共享，应按需求使用None、独立哨兵或工厂。不要为了灵活把所有签名写成**kwargs，否则调用方和检查工具都更难理解允许字段。
 
-
-
 #### 案例推进：把签名当作小型接口
 
 ```python
@@ -69,13 +65,30 @@ assert collect("A", "B", "C", strict=True) == ("A", ("B", "C"), {"strict": True}
 
 `/`前仅按位置，`*`后仅按关键字；*rest收集为元组，**options收集为字典。调用时的*与**执行相反方向的解包。参数形式用于表达真实意图，不要求所有函数都写成灵活但不透明的**kwargs。
 
+#### 默认值、缺省哨兵与递归的边界
+
+默认表达式在def执行时求值。若None表示“没有传入”，用None再创建容器；若None本身也是合法业务值，可用唯一object作为缺省哨兵，并用is判断。哨兵解决状态区分，不自动验证所有字段。
+
+递归把同一问题缩小后再次调用自己，必须有停止条件。每次调用有独立局部执行状态，但共享对象不会自动复制。
+
+```python
+# study-example: S04F
+def countdown_total(n):
+    if type(n) is not int or n < 0:
+        raise ValueError("n必须为非负整数")
+    if n == 0:
+        return 0
+    return n + countdown_total(n - 1)
+assert countdown_total(4) == 10
+```
+
+本例用于观察调用与返回，不适合无限深输入；常规Python有递归深度限制，也不保证尾调用优化。线性累计通常直接用循环。raise在这里先读为“拒绝非法输入并退出”，下一章完整解释异常传播。
+
 ### 2.3 名称从哪里查找
 
 通常先看函数局部，再看相关外层函数绑定、模块全局和内置名称。函数里有赋值时，该名称通常被判为局部；赋值前读取可能抛UnboundLocalError，即使模块中存在同名值。global和nonlocal改变赋值目标，不是让任意变量“自动同步”。
 
 嵌套函数可以访问外层绑定，形成闭包。闭包适合构造带少量配置的函数，但要区分绑定本身与它引用的可变对象。类体与注解场景有额外规则，不能把简化查找顺序机械推广到全部代码。
-
-
 
 #### 案例推进：先理解闭包，再修复晚绑定
 
@@ -100,8 +113,6 @@ nonlocal用于修改相关外层函数的绑定，global指向定义模块中的
 
 可以把函数放进字典、传给另一个函数或从函数返回。sorted的key就是一个例子。lambda提供单表达式匿名函数，复杂逻辑最好用有名称的def。partial可以预先绑定一部分参数；这些工具的目的都是清楚表达依赖，而不是把代码压到最短。
 
-
-
 #### 案例推进：回调、lambda与partial怎样选择
 
 ```python
@@ -118,13 +129,33 @@ assert double(7) == 14
 
 key接收函数而不是它当场调用后的结果；lambda提供一个表达式，tuple键按位置逐项比较。复杂规则用具名函数说明意图。partial预先绑定部分参数，闭包则可以组织更自由的状态与行为，两者都不自动复制传入的可变配置。
 
+#### 结构化匹配和赋值表达式
+
+match按照结构依次匹配，适合分派不同消息。先理解字面量、字典键和捕获名称，再使用guard约束条件。
+
+```python
+# study-example: S04G
+payload = {"type":"query", "limit":3}
+match payload:
+    case {"type":"query", "limit":limit} if type(limit) is int and limit > 0:
+        action = "查询"
+    case {"type":"final", "content":str(content)}:
+        action = "结束"
+    case _:
+        action = "拒绝"
+assert action == "查询"
+raw = " Alice "
+if (name := raw.strip()):
+    assert name == "Alice"
+```
+
+limit是捕获名称，不是与某个已有变量比较；字典模式默认可忽略额外键，因此不能代替完整Schema校验。guard在结构匹配后判断，失败继续后续case。不要依赖失败匹配后的捕获状态。`:=`在表达式中同时绑定并产生值，适合避免清楚场景中的重复计算；普通赋值更易读时保留普通写法。
+
 ### 2.5 从包装函数理解装饰器
 
 先写一个接收fn并返回wrapper的函数，wrapper再调用fn。`@decorate`是把这个包装过程写在定义附近。包装器必须转交参数、返回值和异常；wraps帮助保留名称、文档和追踪原函数的入口。
 
 带参装饰器多一层配置工厂，多装饰器要分别考虑定义阶段和调用阶段。异步函数需要等待真实执行，不能把“创建协程对象”当成本次业务已完成。
-
-
 
 #### 案例推进：不用语法糖写出第一个装饰器
 
@@ -219,36 +250,24 @@ a, b = counter(), counter()
 assert (a(), a(), b()) == (1, 2, 1)
 ```
 
-#### 验证实验 E09
+#### 验证实验 E03
 
 ```python
-# experiment: E09
-from functools import wraps
+# experiment: E03
 events = []
-def decorate(label):
-    events.append("build:" + label)
-    def apply(fn):
-        @wraps(fn)
-        def wrapped(*args, **kwargs):
-            events.append("enter:" + label)
-            try:
-                return fn(*args, **kwargs)
-            finally:
-                events.append("exit:" + label)
-        return wrapped
-    return apply
-@decorate("outer")
-@decorate("inner")
-def add(a, b):
-    """加法示例。"""
-    return a + b
-assert events == ["build:outer", "build:inner"]
-assert add(1, 2) == 3
-assert events[2:] == ["enter:outer", "enter:inner", "exit:inner", "exit:outer"]
-assert add.__name__ == "add" and add.__wrapped__.__name__ == "add"
+def marker():
+    events.append("called")
+    return "fallback"
+assert ("" or marker()) == "fallback"
+assert ("ok" or marker()) == "ok"
+assert events == ["called"]
+assert (0 and marker()) == 0
+assert bool("False") is True
+assert isinstance(True, int) and True == 1
+value = 0
+assert (value or 10) == 10
+assert (10 if value is None else value) == 0
 ```
-
-
 
 ## 4. 示例与逐步走查
 
@@ -284,7 +303,7 @@ at_least调用两次分别建立minimum为10和100的外层绑定，返回两个
 
 ### L09：装饰器行为（P15）
 
-实现带记录回调的同步装饰器：记录调用与完成/失败事件，保持原返回值，异常继续抛出，wraps 保留原名称与文档。
+本章先实现成功路径包装；学完第5章异常后完整验收：实现带记录回调的同步装饰器，记录调用与完成/失败事件，保持原返回值，异常继续抛出，wraps保留原名称与文档。
 
 验收：加法结果相同；原函数抛 ValueError 时调用者仍收到该异常；回调中不记录敏感实参。叠加两个装饰器预测事件顺序。异步函数需要单独设计，不直接套用同步包装。
 

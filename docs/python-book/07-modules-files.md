@@ -28,8 +28,6 @@ Path负责路径操作，open/read_text等负责内容。文本模式读写str�
 
 写出报告前说明覆盖规则：直接覆盖可能在失败时留下不完整内容；需要保留旧文件时可采用临时文件与替换策略，但其保证仍取决于文件系统和使用方式。
 
-
-
 #### 案例推进：先跑通可控的文件往返
 
 ```python
@@ -57,8 +55,6 @@ json.loads把文本解析成Python对象，json.dumps把支持的对象转成文
 
 CSV通过行列保存文本字段，逗号、引号和换行需由csv模块按格式处理。不能用split(',')可靠解析所有CSV，也不能假定读入的金额已经是整数。
 
-
-
 #### 案例推进：让CSV模块处理CSV结构
 
 ```python
@@ -78,13 +74,38 @@ assert int(row["amount_cents"]) == 1990
 
 字段里有逗号，writer按格式引用，reader正确还原。读回的金额仍是文本，需要转换和校验。真实文件配合open(..., newline="", encoding="utf-8")，让csv模块处理换行约定；不要手工split逗号或重复转义。
 
+#### 现在回做JSONL：保留物理行号与惰性
+
+```python
+# study-example: S07D
+import json
+from io import StringIO
+def iter_jsonl(lines):
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"第{line_number}行JSON损坏") from exc
+
+stream = iter_jsonl(StringIO('{"id":"A"}\n\ninvalid\n'))
+assert next(stream) == {"id":"A"}
+try:
+    next(stream)
+except ValueError as exc:
+    assert "第3行" in str(exc)
+else:
+    raise AssertionError("坏行必须报告真实位置")
+```
+
+这次把第五章的惰性消费与本章文件格式组合。空行不变成订单，也不改变后续错误的物理行号。真实文件由外层with拥有，迭代器负责解析；记录还需再经过业务校验，不能把合法JSON自动当作合法订单。
+
 ### 2.5 给程序一个明确的命令行接口
 
 argparse描述输入路径、输出路径和选项。正常数据写stdout，错误说明写stderr，退出码表示是否完成。核心函数返回数据，main处理命令行和用户可理解反馈；这样同一业务逻辑也可被API或测试调用。
 
 完成“读取→解析→业务校验→去重→汇总→写出”后，再按文件边界拆模块。每步输入输出明确，比一开始创建很多空目录更重要。
-
-
 
 #### 案例推进：入口只负责装配与反馈
 
@@ -176,7 +197,23 @@ right = datetime.fromisoformat("2026-11-04T02:00:00+00:00")
 assert left == right
 ```
 
+#### 扩展观察 E01
 
+```python
+# experiment: E01
+source = "result = 1 + 2"
+code = compile(source, "<own-example>", "exec")
+namespace = {}
+assert "result" not in namespace
+exec(code, namespace)  # 这里执行的是自己写死的示例，不是外部输入
+assert namespace["result"] == 3
+try:
+    compile("if True print(1)", "<bad-example>", "exec")
+except SyntaxError:
+    pass
+else:
+    raise AssertionError("应在语法阶段失败")
+```
 
 ## 4. 示例与逐步走查
 
@@ -210,6 +247,12 @@ with TemporaryDirectory() as folder:
 把包含中文、逗号、引号的用户名称及整数分导出 CSV，再读入校验。使用 csv 模块；金额读取后显式转换与校验，拒绝坏行。
 
 验收：写入再读取的业务记录相等，不能手工 split(',') 破坏带逗号的字段。datetime/Money 导出 JSON 时定义字段格式，不靠 default=str 模糊化所有类型。
+
+### L12：惰性 JSONL（P17–20）
+
+实现逐行解析器：跳过空行，对记录做订单校验，失败带 1 起始的物理行号和原因。第一行合法、第二行空、第三行坏 JSON 时，只取第一条不应提前触发第三行错误，继续消费才报第 3 行错误。
+
+验收：不 read 全文件后再假装生成器；调用方提前停止时有明确 close/context 管理方式。正常结束和异常均关闭文件。
 
 ## 6. 验收与自测
 

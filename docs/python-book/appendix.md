@@ -109,3 +109,5 @@
 - [Langfuse评测](https://langfuse.com/docs/evaluation/overview)、[Hello-Agents](https://github.com/datawhalechina/hello-agents)
 
 各来源按对应章节查阅，示例与练习主要来自本仓库自有材料和新编案例，不要求把全部外部课程再次从头学习。
+
+本轮补充核对：[Python控制流与函数](https://docs.python.org/3.12/tutorial/controlflow.html)、[Pydantic严格模式](https://pydantic.dev/docs/validation/latest/concepts/strict_mode/)、[HTTPX分项超时](https://www.python-httpx.org/advanced/timeouts/)、[uv锁定与同步](https://docs.astral.sh/uv/concepts/projects/sync/)、[LangGraph持久化](https://docs.langchain.com/oss/python/langgraph/persistence)、[MCP架构](https://modelcontextprotocol.io/docs/learn/architecture)、[BM25相似度](https://www.elastic.co/docs/reference/elasticsearch/index-settings/similarity)、[LoRA原理](https://huggingface.co/docs/peft/main/en/conceptual_guides/lora)。LoRA链接为main概念文档，安装与训练应选择实际稳定版本；本书未据此安装开发版。

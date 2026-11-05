@@ -16,8 +16,6 @@ list保存有顺序的元素，可通过下标和切片访问，通过append追�
 
 tuple也保存有序元素，创建后不能替换某个位置的引用。它适合固定结构的返回值或记录；单元素tuple要有逗号，例如`(1,)`。解包可以把固定结构赋给多个名称，但元素数量必须符合要求。
 
-
-
 #### 案例推进：第一轮：列表保存顺序，字典表达记录
 
 ```python
@@ -40,13 +38,27 @@ assert paid == ["A", "C"] and total == 2000
 
 列表的append追加一个对象，extend逐个追加来源中的元素；insert在位置前插入，pop移除并返回某项，remove按值删除首个匹配项。删除前要明确不存在时怎样处理。遍历同一个列表时再删除其中元素会改变后续索引，常见筛选需求更适合构造新列表。
 
+#### 解包和重复容器的两个边界
+
+```python
+# study-example: S03F
+first, *middle, last = [1, 2, 3, 4]
+assert first == 1 and middle == [2, 3] and last == 4
+shared = [[]] * 3
+shared[0].append("A")
+assert shared == [["A"], ["A"], ["A"]]
+separate = [[], [], []]
+separate[0].append("A")
+assert separate == [["A"], [], []]
+```
+
+星号目标收集中间剩余元素，赋值仍要满足必要位置数量。列表乘法重复的是元素引用，不会递归创建独立内部列表；分别创建三个列表才得到独立桶。学完2.4后，可将独立版本改写为`[[] for _ in range(3)]`，解释每轮为何得到新对象。这个区别直接影响多用户分组、会话消息与任务状态。
+
 ### 2.2 用字典把字段和名称联系起来
 
 dict将键映射到值，订单可以表示为`{"id":"A","status":"paid"}`。`row["id"]`要求字段存在，缺失时抛KeyError；get允许指定默认值。字段不存在与字段值为None可能有不同含义，不能总用一个get结果混淆二者。
 
 遍历字典本身得到键，items得到键和值。写入已有键更新其值，不改变该键原有插入位置；删除后重新插入则是新的插入。保存多个同ID订单时，不要直接覆盖旧值而丢掉冲突信息。
-
-
 
 #### 案例推进：第二轮：用映射累积每个用户的记录
 
@@ -72,8 +84,6 @@ assert list(groups) == ["Alice", "Bob"]
 set保存唯一可哈希元素，适合记录订单ID；空集合写set()，`{}`是空字典。`a | b`求并集，`a & b`求交集，`a - b`求差集，`a <= b`检查子集。集合不能承担“保留输入顺序”的职责。
 
 字典和列表通常不可直接放进set；需要先提取业务标识。tuple是否可哈希取决于内部元素，不是外面套一个tuple就自动解决问题。第三节会说明哈希与相等如何共同工作。
-
-
 
 #### 案例推进：第三轮：元组与集合承担不同信息
 
@@ -106,8 +116,6 @@ paid_ids = [row["id"] for row in rows if row["status"] == "paid"]
 
 先理解循环中的取元素、判断、追加，再读推导式的“结果表达式、遍历、条件”。如果需要多步更新、错误定位或冲突处理，普通循环通常更清楚。字典/集合推导式改变的是输出结构，不会替你选择正确业务规则。
 
-
-
 #### 案例推进：第四轮：先写清循环，再压缩表达
 
 筛选与转换一步完成时可以使用推导式；多步更新、错误定位与冲突处理保留普通循环更容易讲清。排序前先决定按金额、按ID还是按多字段比较。
@@ -132,8 +140,6 @@ assert copied == [5, 10, 10] and result is None
 enumerate同时取得序号和元素，zip配对序列；长度不一致时应明确截断是否允许。sorted返回新列表，list.sort原地修改且返回None。key提取排序依据，reverse选择方向；相同key的相对顺序稳定。
 
 any寻找一个真值，all检查是否全部为真，两者会短路；空输入结果分别为False和True。Counter、defaultdict和deque是在常见需求上专门化的容器，后续标准库章再展开。
-
-
 
 #### 案例推进：第五轮：复制到底复制到哪里
 
@@ -163,78 +169,6 @@ assert record_copy[0]["tags"] is original[0]["tags"]
 ### 3.3 数据结构由要保持的信息决定
 
 只记录ID可以判断是否见过，却无法比较内容。记录ID→首条订单，便能判断完全重复还是字段冲突，同时利用插入顺序输出。选结构之前先列出必须保留的信息：顺序、次数、首条内容还是全部历史。
-
-### 3.4 机制验证：预测、运行与回看
-
-先读上面的机制，再逐行预测下列实验的结果与副作用。E编号是保留的实验索引，不是章节编号；其中涉及后续协议的细节可在相应章节二次回看。
-
-#### 验证实验 E02
-
-```python
-# experiment: E02
-from copy import deepcopy
-a = [{"tags": []}]
-alias = a
-shallow = a.copy()
-deep = deepcopy(a)
-assert alias is a and shallow is not a
-a[0]["tags"].append("paid")
-assert shallow == [{"tags": ["paid"]}]
-assert deep == [{"tags": []}]
-alias = []
-assert a == [{"tags": ["paid"]}]
-t = ([],)
-try:
-    t[0] += [1]
-except TypeError:
-    pass
-else:
-    raise AssertionError("tuple 的槽位不能重新赋值")
-assert t == ([1],)  # 内部列表先完成了原地修改，之后写回槽位失败
-```
-
-#### 验证实验 E03
-
-```python
-# experiment: E03
-events = []
-def marker():
-    events.append("called")
-    return "fallback"
-assert ("" or marker()) == "fallback"
-assert ("ok" or marker()) == "ok"
-assert events == ["called"]
-assert (0 and marker()) == 0
-assert bool("False") is True
-assert isinstance(True, int) and True == 1
-value = 0
-assert (value or 10) == 10
-assert (10 if value is None else value) == 0
-```
-
-#### 验证实验 E06
-
-```python
-# experiment: E06
-class Key:
-    def __init__(self, value):
-        self.value = value
-    def __hash__(self):
-        return 1  # 故意碰撞，只用于实验
-    def __eq__(self, other):
-        if not isinstance(other, Key):
-            return NotImplemented
-        return self.value == other.value
-table = {Key("A"): 10, Key("B"): 20}
-assert len(table) == 2 and table[Key("A")] == 10
-flags = {True: "first", 1: "second"}
-assert len(flags) == 1 and flags[True] == "second"
-ordered = {"B": 2, "A": 1}
-ordered["B"] = 3
-assert list(ordered) == ["B", "A"]
-```
-
-
 
 ## 4. 示例与逐步走查
 

@@ -16,8 +16,6 @@
 
 先写顺序await，再用create_task/gather组织并发，观察什么时候开始、完成和返回。等待结果的顺序与任务实际结束顺序可以不同；代码中没有真正挂起的操作时，也不保证其他任务马上得到执行机会。
 
-
-
 #### 案例推进：先分清协程对象、调度和等待
 
 ```python
@@ -45,8 +43,6 @@ asyncio.run(main())
 gather组合多个可等待对象，TaskGroup给一组任务更明确的共同生命周期。它们在异常传播、兄弟任务取消和异常组方面不同，不能把一个失败理解为所有其他工作都已经停止。
 
 结果需要保留请求对应关系；空输入、重复用户和部分失败如何表达应先写契约，再选择调度方式。
-
-
 
 #### 案例推进：用失败观察兄弟任务清理
 
@@ -85,8 +81,6 @@ Semaphore限制进入某段操作的数量，但如果已经创建一百万个�
 
 单个请求超时、排队时限和总任务截止时间分别定义。重试只用于约定的临时故障，并受剩余预算限制；写操作超时不能推断外部没有完成。
 
-
-
 #### 案例推进：同时执行的限制需要实际证据
 
 ```python
@@ -116,6 +110,32 @@ active/peak描述同时进入受限区域的数量，结果顺序来自gather的
 ### 2.4 取消与清理
 
 cancel请求任务在合适位置处理取消，不是在任意机器指令处强制终止。清理通常放finally，清理后继续传播取消。父任务失败时，是否取消并等待子任务结束必须明确；不能靠关闭终端完成清理。
+
+#### async for、async with与超时收尾
+
+```python
+# study-example: S11D
+import asyncio
+async def numbers():
+    for number in range(3):
+        await asyncio.sleep(0)
+        yield number
+async def main():
+    result = []
+    async for number in numbers():
+        result.append(number)
+    assert result == [0, 1, 2]
+    try:
+        async with asyncio.timeout(0):
+            await asyncio.sleep(0)
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("本例应触发超时")
+asyncio.run(main())
+```
+
+异步生成器的下一项可能需要等待，因此使用async for；异步上下文的进入/退出也可等待，因此使用async with。timeout通过取消等机制约束当前等待范围，外层捕获转换后的超时；它不是操作系统层面强行中止任意线程或远端动作。真实预算使用业务时限，本例的0只用于稳定演示。
 
 ### 2.5 线程和进程解决不同问题
 
@@ -244,8 +264,6 @@ with ThreadPoolExecutor(max_workers=1) as pool:
         release.set()
     assert future.result(timeout=2) == 7
 ```
-
-
 
 ## 4. 示例与逐步走查
 

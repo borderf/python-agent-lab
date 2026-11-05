@@ -14,6 +14,27 @@
 
 业务任务记录回答任务属于谁、当前状态是什么；图checkpoint保存执行位置与中间状态；审批记录回答谁批准了哪个载荷；动作账本记录对外请求与已确认效果；审计事件解释发生顺序。它们可以共享数据库，却不应混成一份无限增长的聊天记录。
 
+#### 从表、约束和索引理解持久化
+
+关系表将任务、审批与尝试分开保存，主键标识记录，外键表达关联，唯一约束保护业务身份。索引提高某类查询效率，也占空间并增加写入维护代价；不是列越多索引越好。先看实际查询与执行计划，再决定索引。
+
+```python
+# study-example: S16B
+import sqlite3
+from contextlib import closing
+with closing(sqlite3.connect(":memory:")) as connection:
+    connection.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, status TEXT NOT NULL)")
+    connection.execute("CREATE INDEX jobs_tenant_status ON jobs(tenant, status)")
+    with connection:
+        connection.executemany("INSERT INTO jobs VALUES (?, ?, ?)", [("A","a","queued"),("B","b","queued")])
+    rows = connection.execute("SELECT id FROM jobs WHERE tenant=? AND status=? ORDER BY id", ("a","queued")).fetchall()
+    assert rows == [("A",)]
+```
+
+查询值参数化，同时把租户条件写进实际查询；SQL安全与资源授权是不同检查。ORM映射对象和表，并不取消SQL、事务或授权知识；读取关联时逐条查询可能出现N+1，需观察实际查询次数。Schema迁移将表结构变化版本化，数据迁移、回滚与备份恢复也要单独验证，而不是启动时随意删除旧表。
+
+缓存与任务队列是进一步的工程选择。缓存是派生数据，需要失效、身份范围、容量与并发更新策略；队列消息可能重投，消费者仍需幂等，进程内后台任务不等于可靠持久队列。先用数据库与模拟队列讲清契约，再选择Redis等具体服务。
+
 ### 2.2 先定义状态转换再写接口
 
 queued进入running，可能完成、失败、取消或等待审批。审批拒绝和执行失败不是同一种结果；失败重试要记录新attempt与原因。取消请求到达时动作可能正在进行，需确认实际效果后更新状态，不能想当然地宣布回滚。
@@ -25,8 +46,6 @@ queued进入running，可能完成、失败、取消或等待审批。审批拒�
 ### 2.4 幂等键识别重复动作
 
 一个action_id或幂等键应对应约定范围内的同一业务动作与载荷。重复请求应返回已知结果或一致处理，不新增额外效果；错误复用同一个键也可能误抑制另一个合法动作，所以作用域、载荷关系和保留期需明确。
-
-
 
 #### 案例推进：用稳定动作键识别重放
 
@@ -60,8 +79,6 @@ assert first == second and len(writer.effects) == 1
 
 审批不是永远授予某Agent写权限。它需要绑定任务、操作类型、载荷版本/哈希、审批人和有效期；身份或载荷变了，旧审批不能继续使用。执行点再次检查权限，模型声称“用户同意”不等于存在合法审批记录。
 
-
-
 #### 案例推进：审批授权的是具体版本
 
 任务状态描述处理阶段，审批记录描述谁批准哪个载荷，执行记录描述尝试与外部效果。三个概念不要合成一个done布尔值。批准v1后载荷变成v2，应重新审核；重复恢复旧任务也要检查身份、状态和版本。
@@ -71,8 +88,6 @@ assert first == second and len(writer.effects) == 1
 ### 2.6 恢复先面对不确定状态
 
 外部写入完成、本地成功状态尚未落库时崩溃，恢复后不能只根据本地pending再次写。先按幂等键查询或对账，再补记结果；对无法确定的状态交人工处理，而不是伪造确定结论。
-
-
 
 #### 案例推进：把崩溃放到正确的位置
 
