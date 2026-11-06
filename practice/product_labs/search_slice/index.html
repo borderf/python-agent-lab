@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DocPilot 本地搜索练习</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>DocPilot 搜索练习</h1>
+    <p>仅包含两份虚构资料，用于学习前后端交付。没有真实登录或AI回答。</p>
+    <form id="search-form">
+      <label for="query">你要找什么？</label>
+      <div class="controls">
+        <input id="query" name="q" required maxlength="80" placeholder="例如：采购、版本">
+        <button type="submit">搜索</button>
+        <button id="cancel" type="button" disabled>停止等待</button>
+      </div>
+    </form>
+    <p id="status" role="status" aria-live="polite">输入关键词开始查询。</p>
+    <section aria-label="搜索结果" id="results"></section>
+  </main>
+</body>
+</html>

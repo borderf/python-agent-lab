@@ -1,0 +1,13 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; color: #172b40; background: #f5f7fa; }
+body { margin: 0; padding: 2rem 1rem; }
+main { max-width: 48rem; margin: auto; }
+label { display: block; margin-bottom: .5rem; font-weight: 600; }
+.controls { display: flex; gap: .5rem; flex-wrap: wrap; }
+input { flex: 1 1 15rem; min-width: 0; }
+input, button { font: inherit; padding: .7rem; border: 1px solid #62738a; border-radius: .3rem; }
+button { cursor: pointer; background: #143d6b; color: white; }
+button:disabled { background: #586979; cursor: default; }
+:focus-visible { outline: 3px solid #a45200; outline-offset: 3px; }
+article { padding: 1rem; margin-block: 1rem; background: white; border: 1px solid #d4dce5; border-radius: .5rem; }
+h2 { font-size: 1.1rem; }
+#status { min-height: 1.5rem; }

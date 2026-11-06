@@ -1,10 +1,15 @@
 # python-agent-lab
 
-一个以项目练习为主的 Python 学习仓库，记录从 Java 后端开发到 AI 应用开发的学习过程。
+一个以项目练习为主的学习仓库，记录从 Java 后端到 Python / AI 应用，并向软件架构、产品型工程师与创业发展的过程。
 
 ## 学习入口
 
-- [教材总目录：Python、项目工程与 AI 开发，五卷30章](docs/python-book/教材目录.md)
+- [三套独立教材与双方向学习导航](docs/学习导航.md)
+- [Python、项目工程与AI：五卷30章](docs/python-book/教材目录.md)
+- [软件架构：四篇14章，含工作簿与综合实战](docs/architecture-book/教材目录.md)
+- [产品型工程师与创业：四篇14章，含工作簿与综合实战](docs/product-founder-book/教材目录.md)
+- [产品思维、全栈交付与上线推广实操](docs/product-founder-book/附录D-产品思维训练营.md)
+- [架构实验与评审实操](docs/architecture-book/附录D-架构实验与评审实操.md)
 - [教材导读：章节结构、运行方法与学习验收](docs/python-book/00-导读与学习方法.md)
 - [知识覆盖与阅读层次](docs/python-book/附录A-知识覆盖与阅读层次.md)
 - [语言练习任务索引：P01–P60](docs/python-book/附录B-语言练习任务索引.md)
@@ -19,7 +24,7 @@
 - [项目实践规格：接口、工具、状态与审批](docs/project-practice/项目实践规格.md)
 - [项目评测与故障演练](docs/project-practice/评测与故障演练.md)
 
-按教材章节顺序学习；附录任务用于对照验收，项目规格用于实现细节。旧版教程、独立原理讲义和重复周计划已合并清理。
+各套教材按自身前置关系学习，学习导航说明衔接方式；附录用于验收，项目规格用于实现细节。
 
 ## 每天怎样学习
 
@@ -35,6 +40,9 @@
 ```powershell
 # 运行订单集合练习
 uv run python -m python_agent_lab.basics.collections
+
+# 检查架构、产品教材及配套实验
+.venv\Scripts\python.exe -X utf8 scripts\verify_learning_tracks.py
 
 # 运行项目测试
 uv run pytest
