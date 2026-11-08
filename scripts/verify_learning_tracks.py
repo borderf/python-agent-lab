@@ -22,6 +22,7 @@ SECTION_NAMES = (
     "分层练习", "自测与参考推导", "项目交付与验收", "迁移与阅读",
 )
 EXERCISES = (
+    "practice/enterprise_ai/retrieval_baseline.py",
     "practice/architecture_labs/idempotency_sqlite.py",
     "practice/product_labs/metrics_and_cost.py",
     "practice/product_labs/search_slice/checks.py",
@@ -56,7 +57,7 @@ def main() -> int:
             subsections = re.findall(r"^### (\d+\.\d+) ", text, re.M)
             if len(subsections) != len(set(subsections)):
                 failures.append(f"{path.name}: duplicate subsection")
-    for area in ("architecture_labs", "product_labs"):
+    for area in ("enterprise_ai", "architecture_labs", "product_labs"):
         for path in (ROOT / "practice" / area).rglob("*.py"):
             try:
                 ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

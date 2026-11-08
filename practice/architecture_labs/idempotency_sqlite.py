@@ -1,5 +1,6 @@
 """Local transaction/idempotency lesson; not an external exactly-once protocol."""
 
+from contextlib import closing
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -57,6 +58,32 @@ def apply_local(
         return result_id
 
 
+def simulate_lost_reply(folder: Path) -> None:
+    """同一进程模拟两个独立提交的存储；第一轮故意丢弃远端返回值。"""
+    local_path = folder / "client.sqlite"
+    remote_path = folder / "mock-service.sqlite"
+    scope = "tenant-a:submit"
+    with closing(sqlite3.connect(local_path)) as local, closing(connect(remote_path)) as remote:
+        local.execute("CREATE TABLE pending (key TEXT PRIMARY KEY, payload TEXT, receipt TEXT)")
+        with local:
+            local.execute("INSERT INTO pending VALUES (?, ?, NULL)", ("review-42", '{"version":1}'))
+        key, payload = local.execute("SELECT key, payload FROM pending").fetchone()
+        apply_local(remote, scope, key, json.loads(payload))
+        # 模拟远端已提交、客户端尚未收到回执就中断，关闭双方连接。
+
+    with closing(sqlite3.connect(local_path)) as local, closing(connect(remote_path)) as remote:
+        effects = remote.execute("SELECT COUNT(*) FROM effects").fetchone()[0]
+        key, payload = local.execute("SELECT key, payload FROM pending WHERE receipt IS NULL").fetchone()
+        print(f"before recovery: local receipt missing, remote effects={effects}")
+        assert effects == 1
+        receipt = apply_local(remote, scope, key, json.loads(payload))
+        with local:
+            local.execute("UPDATE pending SET receipt = ? WHERE key = ?", (receipt, key))
+        assert remote.execute("SELECT result_id FROM effects").fetchall() == [(receipt,)]
+        assert local.execute("SELECT receipt FROM pending").fetchall() == [(receipt,)]
+        print("after recovery: local receipt matches the single remote effect")
+
+
 def main() -> None:
     # Keep the self-owned temporary directory inside the known writable lab.
     lab_directory = Path(__file__).resolve().parent
@@ -90,6 +117,7 @@ def main() -> None:
             assert db.execute("SELECT COUNT(*) FROM effects").fetchone()[0] == 3
         finally:
             db.close()
+        simulate_lost_reply(Path(folder))
     print("PASS: local replay, payload conflict, scope, rollback, reopen")
     print("Not covered: external side effects, multi-node concurrency, PostgreSQL")
 

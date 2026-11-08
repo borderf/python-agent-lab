@@ -1,5 +1,6 @@
 from python_agent_lab.basics.collections import (
     get_paid_orders,
+    total_amount_cents,
 )
 
 
@@ -34,3 +35,12 @@ def test_get_paid_orders():
     paid_orders = get_paid_orders(orders)
     assert len(paid_orders) == 2
     assert all(order["status"] == "paid" for order in paid_orders)
+
+
+def test_legacy_decimal_yuan_are_counted_in_cents():
+    orders = [
+        {"id": "x", "user": "Alice", "amount": 0.29, "status": "paid"},
+        {"id": "y", "user": "Alice", "amount": 19.99, "status": "pending"},
+    ]
+    assert total_amount_cents(orders, "paid") == 29
+    assert total_amount_cents(orders) == 2028

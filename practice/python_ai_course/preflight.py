@@ -19,9 +19,9 @@ def main() -> None:
         status = "已安装" if importlib.util.find_spec(module) else "尚未安装"
         print(f"{module}：{status}")
 
-    print("\n第一周练习只需标准库和 pytest；其余库到对应章节再安装。")
+    print("\n订单基础练习需要标准库和 pytest，其余依赖按章节添加。")
     print("准备检查完成；TODO 实现和课程验收仍需要你完成。")
-    print("先阅读 docs/python-book/教材目录.md，按章节学习；练习契约见 practice/python_ai_course/练习说明.md。")
+    print("学习顺序见 docs/学习导航.md。第一题见 practice/python_ai_course/练习说明.md 的整数分迁移练习。")
 
 
 if __name__ == "__main__":

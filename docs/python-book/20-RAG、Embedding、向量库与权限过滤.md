@@ -113,6 +113,25 @@ assert visible("a") == [] and len(rows) == 2
 
 完整验收包括：旧版→新版后当前答案引用新版；删除后候选、上下文与缓存都不含旧内容；失败构建不覆盖可用代次；撤权立即影响在线可见性。离线语料评测与更新流程评测是两类任务。
 
+### 2.8 为什么相似的句子会被排到一起
+
+取问题“预付款退回后留什么凭证”，正例是要求保留原付款流水号的退款条款。随机找一条“证书有效期”作为负例，按词面很容易区分；换成“合同预付款比例不得超过 20%”，多个关键词重合，却回答了另一个问题。这种容易混淆的错误候选叫难负样本。标注前要读完整条款，多证据问题可能有几个正例，错把正例当负例会教出错误的排序。
+
+双编码器分别计算问题向量和文档向量。训练的一种方式是对一个问题与一组候选的相似度做 softmax，增加正例的相对权重。下面固定正例分数，只改变负例分数。先预测哪组损失大，再运行：
+
+```python
+# study-example: S20C
+from math import exp, log
+
+def contrastive_loss(positive, negative):
+    # 两个候选的教学算例，温度取 1。
+    return -log(exp(positive) / (exp(positive) + exp(negative)))
+
+assert contrastive_loss(0.8, 0.7) > contrastive_loss(0.8, -0.2)
+```
+
+正负例差距变小时，训练目标给出更大损失。真实训练还涉及成批采样、温度和参数更新。线上可以预先算文档向量，提问时只算问题向量即可比较。交叉编码器将一对问题与候选一起编码，可利用细粒度匹配信息，每个候选都要重新打分，适合对小集合重排。第 21 章另给一种让生成模型给候选排顺序的对照，可分别比较两种机制的成本。[检索与重排](https://sbert.net/examples/sentence_transformer/applications/retrieve_rerank/README.html) · [对比学习损失](https://sbert.net/docs/package_reference/sentence_transformer/losses.html)
+
 ## 3. 原理讲解与推导
 
 ### 3.1 相似度不是事实函数

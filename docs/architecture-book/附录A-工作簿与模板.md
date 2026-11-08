@@ -103,4 +103,4 @@
 .venv\Scripts\python.exe -X utf8 practice\architecture_labs\idempotency_sqlite.py
 ```
 
-它不验证多机、真实外部API、PostgreSQL隔离或生产吞吐。挑战：将故障点移到远端写入后，说明为何本地事务不能撤销远端效果，再设计模拟远端对账。
+第二部分模拟远端已写入、客户端缺回执。把两库重开前后的记录填入故障矩阵，再设计远端无幂等时的人工对账。真实网络、PostgreSQL 隔离和负载数据在对应环境另测。

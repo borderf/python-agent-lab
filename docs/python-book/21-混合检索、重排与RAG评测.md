@@ -35,11 +35,7 @@
 def rrf(rankings, constant=60):
     scores = {}
     for ranking in rankings:
-        seen = set()
-        for rank, item in enumerate(ranking, start=1):
-            if item in seen:
-                continue
-            seen.add(item)
+        for rank, item in enumerate(dict.fromkeys(ranking), start=1):
             scores[item] = scores.get(item, 0.0) + 1 / (constant + rank)
     return sorted(scores, key=lambda item: (-scores[item], item))
 
@@ -85,6 +81,12 @@ Recall看需要的证据找回多少，Precision看返回项中相关多少，MR
 
 先分出解析/入库缺失、召回缺失、排序靠后、版本错误与生成偏离，再对问题最多的一类改进。保留未用于调参的验证题，记录样本数、延迟、用量和环境。少量题适合练习，不代表生产泛化已经验证。
 
+### 2.6 一个不用读问题也能拿满分的检索器
+
+某租户今天只有三个可见来源，标准答案在其中。每次都返回这三个来源，无论问什么，Recall@5 都是 1。增加同义问题也无法用它区分排序优劣。现有语料加入了预付款退回、票据与预算变更等同期材料。“预付款上限”和“退回预付款要留什么”都能匹配付款字样，所需依据却不同。
+
+运行 `uv run python -m practice.enterprise_ai.retrieval_baseline`。读 `archive_deadline` 的两行输出，手算为什么来源从第 2 名升到第 1 名会提高倒数排名，却不改变 Recall@5。再看 `two_steps`，需要两份来源，只命中其中一份时召回为 0.5，即使第一名已经相关。然后把一条候选列表换成 A、A、B，解释本章两处 RRF 示例为什么都先去重再编号。[离线对照操作与分母](../project-practice/评测与故障演练.md#先跑一个离线对照)
+
 ## 3. 原理讲解与推导
 
 ### 3.1 流水线错误有不同位置
@@ -117,6 +119,25 @@ assert rrf([["A","B"],["B","C"]])[0] == "B"
 RRF示例中B在两条排名都出现，累计贡献超过只出现一次的A或C，因此排第一。它展示排名融合机制，不证明这组候选对真实问题更相关；必须再用标准来源标签与生成结果验证。
 
 ## 5. 动手练习
+
+### 把手算向量换成真实 embedding
+
+先跑上一节的离线基线。准备本机 Ollama 服务，用 `ollama list` 确认已安装的模型标签。选择支持中文和 embedding 的模型作为编码器；额外比较生成式重排时，再选择一个支持 JSON 输出的聊天模型。以下标签是占位值，需换成自己机器上的名称。脚本只调用本机服务。
+
+```powershell
+$embedModel = '替换为已安装的嵌入模型标签'
+uv run python -m practice.enterprise_ai.vector_compare --embed-model $embedModel
+$chatModel = '替换为已安装的聊天模型标签'
+uv run python -m practice.enterprise_ai.vector_compare --embed-model $embedModel --rerank-model $chatModel
+```
+
+1. 查看 `eligible_sources` 之后的候选。相同的租户、日期和可信制度范围适用于所有方法。问题和可见原文送去编码，标准来源只留给评分端。记录模型标签、实际版本和语料版本。
+2. 看 `unit_vectors` 如何检查数量、有限值及非零范数，再归一化。向量点积此时等于余弦相似度。这里是小语料上的精确扫描，换近似索引时可以用这份结果检查索引漏掉了什么。
+3. 对照字面匹配、稠密召回、两者排名融合三行结论。选一道同义改写和一道精确编号题，导出前五来源，找出正确来源首次掉到第几名。融合只使用名次；来源是否满足日期条件在融合前已决定。
+4. 可选重排把融合前六名连同问题交给聊天模型，校验返回值是候选的完整排列，再评前五。正确来源在第七名时，这个操作无法把它提到第一名。若要比较交叉编码器，保持这六个候选相同，再用问题与每一条文档配对打分。
+5. 固定参数后加 `--split holdout` 运行。写下哪一种方法值得采用及原因。在同一环境另测冷启动和热请求，分别计入索引构建、问题编码与重排。脚本进程内会复用已算的文本向量，整条命令的耗时不能充当单次线上延迟。
+
+还可自制一份两页制度和一张含例外条件的表格，分别标正确页、有效期及所需条款。将第 19 章的解析结果接入同一检索接口，新增一条必须从表头和数据行合并取证的题。比较改分块和改模型各自修好了哪类错误。[实验代码](../../practice/enterprise_ai/vector_compare.py) · [Ollama embedding 协议](https://docs.ollama.com/api/embed)
 
 ### 练习一：相同条件四组对照
 

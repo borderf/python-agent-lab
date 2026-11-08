@@ -52,8 +52,8 @@ decimal.Decimal 是 Python 标准库中的一个类，用于进行高精度的�
 2. 创建 Decimal 对象时，最好使用字符串而不是浮点数，以避免浮点数的精度问题。例如：
 from decimal import Decimal
 a = Decimal("0.1")
-3. Decimal 对象之间的运算会保持高精度，但需要注意性能问题
-4. Decimal 对象可以与整数和其他 Decimal 对象进行运算，但与浮点数运算时可能会引入精度问题，建议尽量避免。
+3. Decimal 运算受当前上下文的精度与舍入设置影响，除法等操作可能需要舍入。
+4. Decimal 可以与整数做加法；Decimal("0.1") + 0.1 会抛出 TypeError。业务入口应先约定表示和单位。
 """
 class Order(TypedDict):
     id: str
@@ -105,7 +105,7 @@ sum和生成器表达式的组合使用可以在不创建额外列表的情况�
 2. sum 函数会迭代生成器表达式，逐个累加值，从而计算总和。
 优点：
 - 节省内存：不需要创建额外的列表，尤其在处理大量数据时非常有用。
-- 提高性能：生成器表达式在迭代时按需生成值，避免了不必要的计算和内存分配。
+- sum 会消耗全部输入，仍要计算每一项；主要节约的是中间列表占用的空间。
 - 代码简洁：使用生成器表达式可以使代码更简洁易读。
 - 灵活性：生成器表达式可以与其他函数组合使用，如 map、filter 等，从而实现更复杂的数据处理。
 - 延迟计算：生成器表达式在需要时才会计算值，这对于处理大数据集或流式数据非常有用。
@@ -175,11 +175,13 @@ def get_order_ids(orders: list[Order]) -> tuple[set[str], set[str], set[str]]:
     unpaid_order_ids = order_ids - paid_order_ids
     return (order_ids, paid_order_ids, unpaid_order_ids)
 
-def total_amount_cents(orders: list[Order], status = None) -> int:
-    """以分为单位计算销售总额，可以指定状态，无状态时计算所有订单总额"""
-    if status:
-        return sum(int(Decimal(order["amount"]) * 100) for order in orders if order["status"] == status)
-    return sum(int(Decimal(order["amount"]) * 100) for order in orders)
+def total_amount_cents(orders: list[Order], status: OrderStatus | None = None) -> int:
+    """旧版元订单按其十进制文本换算，逐笔截去不足一分的部分再求和。"""
+    return sum(
+        int(Decimal(str(order["amount"])) * 100)
+        for order in orders
+        if status is None or order["status"] == status
+    )
 
 
 if __name__ == "__main__":

@@ -24,6 +24,36 @@
     "text": "此材料仅允许tenant-b访问。该教学租户的合同预付款比例不得超过10%。"
   },
   {
+    "source_id": "policy-a-acceptance", "tenant_id": "tenant-a", "version": "1",
+    "title": "验收材料登记", "valid_from": "2025-01-01", "valid_to": null,
+    "section": "验收资料", "text": "验收时将签收单与项目编号一并登记。签收单缺失时由项目经办人补交。"
+  },
+  {
+    "source_id": "policy-a-archive", "tenant_id": "tenant-a", "version": "1",
+    "title": "合同归档", "valid_from": "2025-01-01", "valid_to": null,
+    "section": "归档时点", "text": "合同签署后五个工作日内归档。归档附件须保留签署日期和合同编号。"
+  },
+  {
+    "source_id": "policy-a-budget-change", "tenant_id": "tenant-a", "version": "1",
+    "title": "预算调整留痕", "valid_from": "2025-01-01", "valid_to": null,
+    "section": "变更记录", "text": "调整预算前登记变更原因、原预算和申请编号，保留负责人确认记录。"
+  },
+  {
+    "source_id": "policy-a-invoice", "tenant_id": "tenant-a", "version": "1",
+    "title": "付款凭据核对", "valid_from": "2025-01-01", "valid_to": null,
+    "section": "票据登记", "text": "发票登记时核对发票编号、项目编号和开票金额。票据有误时退回更正。"
+  },
+  {
+    "source_id": "policy-a-refund", "tenant_id": "tenant-a", "version": "1",
+    "title": "预付款退回登记", "valid_from": "2025-01-01", "valid_to": null,
+    "section": "退款凭据", "text": "退回预付款时保留原付款流水号和退款凭据，以便对账。"
+  },
+  {
+    "source_id": "policy-a-renew", "tenant_id": "tenant-a", "version": "1",
+    "title": "资格证明续期", "valid_from": "2025-01-01", "valid_to": null,
+    "section": "续期手续", "text": "续期申请应附新证明编号和签发日期。旧证明的有效期不能直接覆盖。"
+  },
+  {
     "source_id": "untrusted-note-a", "tenant_id": "tenant-a", "version": "1",
     "title": "不可信附件测试", "valid_from": "2025-01-01", "valid_to": null,
     "section": "附件内容", "trusted_policy": false,

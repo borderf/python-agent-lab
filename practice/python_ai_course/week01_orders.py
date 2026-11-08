@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Literal, TypedDict
 
+from python_agent_lab.basics.basic_operation import format_cents as format_cents, normalize_value
+
 OrderStatus = Literal["paid", "pending", "cancelled"]
 
 
@@ -24,14 +26,7 @@ class Report(TypedDict):
 
 def normalize_name(value: str) -> str:
     """01：去两端空白，保留大小写；非字符串或结果为空时抛 ValueError。"""
-    # TODO：先判断输入类型，再处理字符串；不要修改其他大小写。
-    raise NotImplementedError("第 01 课：normalize_name")
-
-
-def format_cents(cents: int) -> str:
-    """01：非负整数分转两位小数字符串；拒绝 bool/float/负数。"""
-    # TODO：用整数计算元与余下的分；结果不带货币单位。
-    raise NotImplementedError("第 01 课：format_cents")
+    return normalize_value(value)
 
 
 def get_paid_orders(orders: list[Order]) -> list[Order]:
