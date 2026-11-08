@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocPilot 教学切片</title>
+<style>
+  body { max-width: 780px; margin: 32px auto; padding: 0 20px; font: 17px/1.8 system-ui, sans-serif; color: #20352f; }
+  label { display: block; margin-top: 12px; }
+  input, textarea, button { box-sizing: border-box; padding: 10px; font: inherit; max-width: 100%; }
+  input, textarea { width: 100%; border: 1px solid #9aada5; border-radius: 6px; }
+  button { margin-top: 12px; cursor: pointer; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f1f5f3; }
+  .muted { color: #58675f; }
+</style>
+<main>
+  <h1>查制度，核对依据</h1>
+  <p class="muted">教学身份默认使用 demo-a 或 demo-b。fixture 模式复述候选资料，用来检查程序链路，答案需要人工核对。</p>
+  <label>教学访问令牌 <input id="token" type="password" autocomplete="off" value="demo-a"></label>
+  <form id="question-form">
+    <label>问题 <textarea id="question" rows="2" required>本租户预付款比例上限是多少？</textarea></label>
+    <label>适用日期 <input id="date" type="date" value="2026-10-01" required></label>
+    <button>查找依据</button>
+  </form>
+  <p id="status" role="status" aria-live="polite"></p>
+  <section id="result" hidden>
+    <h2>回答与来源</h2>
+    <p id="answer"></p>
+    <p id="mode" class="muted"></p>
+    <ul id="citations"></ul>
+    <pre id="source" hidden></pre>
+    <label>反馈说明 <input id="note" maxlength="1000" placeholder="例如引用有依据，但回答没有解释适用条件"></label>
+    <button id="helpful" type="button">对本次任务有帮助</button>
+    <button id="unhelpful" type="button">需要改进</button>
+  </section>
+  <details>
+    <summary>导入一段新资料</summary>
+    <form id="document-form">
+      <label>来源 ID <input id="source-id" pattern="[a-zA-Z0-9_-]+" value="my-policy-v1" required></label>
+      <label>生效日期 <input id="from" type="date" value="2026-07-01" required></label>
+      <label>原文 <textarea id="text" rows="3" required>材料交接时应保留交接单编号。</textarea></label>
+      <button>导入资料</button>
+    </form>
+  </details>
+</main>
+<script>
+  const element = id => document.getElementById(id);
+  let answerId = null;
+  let pending = null;
+  let generation = 0;
+
+  async function request(path, body, signal) {
+    const response = await fetch(path, {
+      method: body ? 'POST' : 'GET', signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${element('token').value}` },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(`${response.status} ${JSON.stringify(data.detail)}`);
+    return data;
+  }
+
+  function resetQuestion() {
+    generation += 1;
+    pending?.abort();
+    answerId = null;
+    element('result').hidden = true;
+    element('source').hidden = true;
+    element('status').textContent = '';
+  }
+
+  element('token').addEventListener('input', resetQuestion);
+  element('date').addEventListener('input', resetQuestion);
+  element('question').addEventListener('input', resetQuestion);
+  element('question-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    resetQuestion();
+    const current = generation;
+    pending = new AbortController();
+    element('status').textContent = '正在查询…';
+    try {
+      const data = await request('/api/questions', { question: element('question').value,
+        as_of: element('date').value }, pending.signal);
+      if (current !== generation) return;
+      answerId = data.answer_id;
+      element('answer').textContent = data.answer;
+      element('mode').textContent = `模型 ${data.model} · 适用日期 ${data.as_of} · ${data.needs_review ? '请核对依据' : '已返回引用'}`;
+      element('citations').replaceChildren();
+      for (const citation of data.citations) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = `${citation.source_id} · 版本 ${citation.version} · ${citation.quote}`;
+        button.addEventListener('click', async () => {
+          try {
+            const source = await request(`/api/documents/${encodeURIComponent(citation.source_id)}`);
+            if (current !== generation) return;
+            element('source').textContent = JSON.stringify(source, null, 2);
+            element('source').hidden = false;
+          } catch (error) { element('status').textContent = error.message; }
+        });
+        item.append(button);
+        element('citations').append(item);
+      }
+      element('result').hidden = false;
+      element('status').textContent = data.citations.length ? '可以打开来源核对。' : '没有找到依据。';
+    } catch (error) {
+      if (current === generation && error.name !== 'AbortError') element('status').textContent = error.message;
+    }
+  });
+
+  async function feedback(helpful) {
+    if (!answerId) return;
+    try {
+      await request('/api/feedback', { answer_id: answerId, helpful, note: element('note').value });
+      element('status').textContent = '反馈已保存。';
+    } catch (error) { element('status').textContent = error.message; }
+  }
+  element('helpful').addEventListener('click', () => feedback(true));
+  element('unhelpful').addEventListener('click', () => feedback(false));
+  element('document-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      const data = await request('/api/documents', { source_id: element('source-id').value,
+        title: '手工导入资料', section: '正文', version: '1', valid_from: element('from').value,
+        valid_to: null, text: element('text').value });
+      element('status').textContent = `来源 ${data.document_id} 已就绪。`;
+    } catch (error) { element('status').textContent = error.message; }
+  });
+</script>
+</html>

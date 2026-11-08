@@ -17,7 +17,24 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.9,<1",
+    "mypy>=1.14,<2",
 ]
+web = [
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    "uvicorn>=0.30,<1",
+    "sqlalchemy>=2,<3",
+    "alembic>=1.13,<2",
+    "pypdf>=5,<7",
+]
+agent = [
+    "langgraph>=1,<2",
+    "langgraph-checkpoint-sqlite>=3,<4",
+]
+vector = ["qdrant-client>=1.14,<2"]
+mcp = ["mcp>=1.20,<2"]
+architecture = ["psycopg[binary]>=3.2,<4"]
 
 [[tool.uv.index]]
 url = "http://mirrors.aliyun.com/pypi/simple"

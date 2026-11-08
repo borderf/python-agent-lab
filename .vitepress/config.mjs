@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitepress'
+import { learningPaths } from './learning-paths.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const repository = 'https://github.com/borderf/python-agent-lab'
@@ -41,6 +42,7 @@ export default defineConfig({
   rewrites: { 'docs/index.md': 'index.md' },
   lastUpdated: true,
   themeConfig: {
+    learningPaths,
     siteTitle: 'Python 与 AI 开发',
     nav: [
       learningRoute,
@@ -61,6 +63,8 @@ export default defineConfig({
       ]),
       '/': [
         learningRoute,
+        { text: '从实验到项目交付', link: '/docs/project-practice/从实验到项目交付' },
+        { text: '阶段自测与复习', link: '/docs/python-book/附录H-阶段自测与复习' },
         { text: 'Python 与 AI', link: '/docs/python-book/教材目录' },
         { text: '软件架构', link: '/docs/architecture-book/教材目录' },
         { text: '产品与创业', link: '/docs/product-founder-book/教材目录' },
@@ -75,7 +79,10 @@ export default defineConfig({
     outlineTitle: '本页内容',
     returnToTopLabel: '回到顶部',
     darkModeSwitchLabel: '切换深浅模式',
-    docFooter: { prev: '上一节', next: '下一节' },
+    darkModeSwitchTitle: '切换深色模式',
+    lightModeSwitchTitle: '切换浅色模式',
+    skipToContentLabel: '跳到正文',
+    docFooter: { prev: '全书上一节', next: '全书下一节' },
     lastUpdated: { text: '最后更新' },
     socialLinks: [{ icon: 'github', link: repository }],
     search: {
@@ -83,13 +90,16 @@ export default defineConfig({
       options: {
         miniSearch: {
           options: {
-            tokenize: text => Array.from(new Intl.Segmenter('zh-CN', { granularity: 'word' }).segment(text))
-              .filter(part => part.isWordLike).map(part => part.segment)
+            tokenize: text => typeof Intl.Segmenter === 'function'
+              ? Array.from(new Intl.Segmenter('zh-CN', { granularity: 'word' }).segment(text))
+                .filter(part => part.isWordLike).map(part => part.segment)
+              : text.match(/[\p{Script=Han}]|[a-zA-Z0-9_]+/gu) ?? []
           }
         },
         translations: {
           button: { buttonText: '搜索教程', buttonAriaLabel: '搜索教程' },
           modal: { noResultsText: '没有找到相关内容', resetButtonTitle: '清空搜索',
+            backButtonTitle: '关闭搜索', displayDetails: '显示搜索摘要',
             footer: { selectText: '选择', navigateText: '切换', closeText: '关闭' } }
         }
       }

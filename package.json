@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "docs:dev": "vitepress dev",
+    "docs:test": "node --test .vitepress/tests/reading-store.test.mjs",
     "docs:build": "vitepress build",
     "docs:preview": "vitepress preview"
   },

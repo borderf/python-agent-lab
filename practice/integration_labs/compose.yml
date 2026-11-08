@@ -1,0 +1,16 @@
+services:
+  docpilot:
+    build:
+      context: ../..
+      dockerfile: practice/integration_labs/Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - docpilot-data:/app/.learning-labs
+    environment:
+      LAB_MODEL_PROVIDER: fixture
+      LAB_TOKEN_A: demo-a
+      LAB_TOKEN_B: demo-b
+
+volumes:
+  docpilot-data:

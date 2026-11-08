@@ -17,6 +17,8 @@
 
 ## 二、运行本地只读样例
 
+本节的标准库样例用于先看清页面与 HTTP 数据流。完成后进入[数据库、资料导入、引用回答与反馈的完整切片](../project-practice/从实验到项目交付.md#从空数据库启动-d2)，沿用同一用户任务逐层增加能力。真实模型、持久化与恢复在该手册中累计验证。
+
 文件位置：[server.py](../../practice/product_labs/search_slice/server.py)、[index.html](../../practice/product_labs/search_slice/index.html)、[app.js](../../practice/product_labs/search_slice/app.js)、[style.css](../../practice/product_labs/search_slice/style.css)。只使用两份虚构制度，不连接模型或真实数据。
 
 在仓库根目录运行：

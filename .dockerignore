@@ -1,0 +1,12 @@
+.git
+.venv
+node_modules
+.vitepress/cache
+.vitepress/dist
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.learning-labs
+**/__pycache__
+.env
+.env.*

@@ -4,7 +4,7 @@
 
 **从[学习导航](docs/学习导航.md)开始。** 里面有起点自测、五个阶段的时间预算、章节和交付标准。架构练习、用户访谈与试点都跟随同一组项目进行。
 
-手机阅读版使用 VitePress 构建，包含教材目录、中文搜索和架构图。首次发布与本地预览见[文档网站使用说明](docs/文档网站使用说明.md)。
+手机阅读版使用 VitePress 构建，包含中文搜索、学习路线、字号、已读标记、续读和可放大的架构图。首次发布与本地预览见[文档网站使用说明](docs/文档网站使用说明.md)。
 
 ## 第一次开始
 
@@ -32,8 +32,10 @@ uv run python -m pytest practice/python_ai_course/checks_week01.py -q -k "money_
 | --- | --- |
 | 找章节、决定下一步 | [学习导航](docs/学习导航.md) · [Python 与 AI](docs/python-book/教材目录.md) · [软件架构](docs/architecture-book/教材目录.md) · [产品与创业](docs/product-founder-book/教材目录.md) |
 | 练语言、找代码位置 | [语言检查表](docs/python-book/附录C-Python能力检查表.md) · [章节实验区](practice/chapter_labs/练习说明.md) · [配套练习及检查文件](practice/python_ai_course/练习说明.md) |
-| 实现两份 AI 作品 | [虚构数据与可运行实验](practice/enterprise_ai/虚构数据说明.md) · [接口、工具与审批规格](docs/project-practice/项目实践规格.md) |
+| 实现两份 AI 作品 | [从实验到项目交付](docs/project-practice/从实验到项目交付.md) · [虚构数据与可运行实验](practice/enterprise_ai/虚构数据说明.md) · [接口、工具与审批规格](docs/project-practice/项目实践规格.md) |
 | 验收与复盘 | [项目里程碑](docs/python-book/附录E-项目里程碑与交付检查.md) · [评测与故障演练](docs/project-practice/评测与故障演练.md) · [学习记录模板](docs/python-book/附录D-学习记录模板.md) |
+
+接口与持久化参考切片从 `uv sync --locked --group web --inexact` 开始；LangGraph、向量库、MCP 和 PostgreSQL 分别安装对应可选组，命令见项目装配手册。默认 `uv run pytest` 会跳过未安装组的集成实验。GitHub 的 Python 工作流安装 web、agent、vector、mcp 组，检查教材及这些离线集成；外部模型、PostgreSQL 服务与 Docker 另按实际环境验收。
 
 ## 常用命令
 

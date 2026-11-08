@@ -14,6 +14,7 @@
 
 .vp-doc {
   overflow-wrap: anywhere;
+  font-size: var(--reading-font-size, 17px);
 }
 
 .vp-doc p,
@@ -39,9 +40,15 @@
   height: auto;
 }
 
+.diagram-canvas { overflow: auto; max-width: 100%; }
+.diagram-expand, .diagram-dialog button { display: block; color: #24574b; padding: 8px; min-height: 44px; cursor: pointer; }
+.diagram-dialog { width: min(96vw, 1400px); max-width: 96vw; max-height: 92dvh; padding: 20px; border: 1px solid #9aada5; border-radius: 10px; background: white; color: #20352f; }
+.diagram-dialog::backdrop { background: #15251f99; }
+.diagram-dialog .diagram-canvas { max-height: 75dvh; }
+
 @media (max-width: 640px) {
   .vp-doc {
-    font-size: 17px;
+    font-size: var(--reading-font-size, 17px);
   }
 
   .vp-doc table {
@@ -50,3 +57,25 @@
     font-size: 15px;
   }
 }
+
+.reading-tools {
+  padding: 14px 0 18px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--vp-c-divider);
+  font-size: 14px;
+}
+
+.reading-settings { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.reading-settings label { display: flex; align-items: center; gap: 8px; }
+.reading-settings select { appearance: auto; min-height: 44px; padding: 8px 10px; border: 1px solid var(--vp-c-divider); border-radius: 6px; background: var(--vp-c-bg); color: var(--vp-c-text-1); }
+.reading-settings input { width: 18px; height: 18px; accent-color: var(--vp-c-brand-1); }
+.reading-settings .read-check { min-height: 44px; cursor: pointer; }
+.route-next { display: block; margin-top: 12px; color: var(--vp-c-brand-1); line-height: 1.7; }
+.route-progress { margin: 10px 0 0; color: var(--vp-c-text-2); font-size: 13px; line-height: 1.7; }
+.reading-next { padding: 20px 0; margin-top: 24px; border-top: 1px solid var(--vp-c-divider); line-height: 1.8; }
+.reading-next p { color: var(--vp-c-text-2); font-size: 14px; }
+.reading-next a { display: inline-block; padding: 8px 0; color: var(--vp-c-brand-1); }
+.continue-reading { max-width: 1152px; margin: 0 auto 32px; padding: 0 24px; }
+.continue-reading p { line-height: 1.7; }
+.continue-reading button { color: var(--vp-c-brand-1); font-weight: 600; min-height: 44px; }
+.continue-reading span { display: block; font-size: 13px; color: var(--vp-c-text-2); }

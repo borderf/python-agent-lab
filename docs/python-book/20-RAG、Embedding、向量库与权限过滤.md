@@ -168,6 +168,8 @@ assert [row["id"] for row in ranked] == ["A"]
 
 ## 5. 动手练习
 
+先做[真实 Qdrant 生命周期实验](../project-practice/从实验到项目交付.md#运行真实-qdrant-生命周期实验)，用手工向量隔离验证入库、过滤、重开、切换与删除。再换第 21 章的真实 embedding，将排序接回同一问答接口，分别记录存储正确性与模型检索质量。
+
 ### 练习一：先完成关键词基线
 
 使用[policies.json](../../practice/enterprise_ai/data/policies.json)构建带租户、版本和有效区间的文档块。先不接模型，按[retrieval_cases.json](../../practice/enterprise_ai/data/retrieval_cases.json)导出每题候选来源，核对当前、历史和生效边界案例。

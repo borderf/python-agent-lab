@@ -57,7 +57,7 @@ def main() -> int:
             subsections = re.findall(r"^### (\d+\.\d+) ", text, re.M)
             if len(subsections) != len(set(subsections)):
                 failures.append(f"{path.name}: duplicate subsection")
-    for area in ("enterprise_ai", "architecture_labs", "product_labs"):
+    for area in ("enterprise_ai", "architecture_labs", "product_labs", "integration_labs"):
         for path in (ROOT / "practice" / area).rglob("*.py"):
             try:
                 ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
