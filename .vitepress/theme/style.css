@@ -1,0 +1,52 @@
+:root {
+  --vp-font-family-base: 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --vp-font-family-mono: 'Cascadia Code', Consolas, monospace;
+  --vp-c-brand-1: #33645a;
+  --vp-c-brand-2: #437b70;
+  --vp-c-brand-3: #528d81;
+}
+
+.dark {
+  --vp-c-brand-1: #8dccb8;
+  --vp-c-brand-2: #72b9a4;
+  --vp-c-brand-3: #33645a;
+}
+
+.vp-doc {
+  overflow-wrap: anywhere;
+}
+
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.85;
+}
+
+.vp-doc summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.mermaid-diagram {
+  margin: 24px 0;
+  padding: 16px;
+  overflow-x: auto;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.mermaid-diagram svg {
+  max-width: none;
+  height: auto;
+}
+
+@media (max-width: 640px) {
+  .vp-doc {
+    font-size: 17px;
+  }
+
+  .vp-doc table {
+    max-width: 100%;
+    overflow-x: auto;
+    font-size: 15px;
+  }
+}
