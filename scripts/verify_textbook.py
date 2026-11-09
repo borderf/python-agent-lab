@@ -39,13 +39,26 @@ def anchors(text: str) -> set[str]:
 def verify(static_only: bool) -> dict:
     failures: list[str] = []
     chapters = sorted(p for p in BOOK.glob("[0-9][0-9]-*.md") if not p.name.startswith("00-"))
+    if [int(path.name[:2]) for path in chapters] != list(range(1, 31)):
+        failures.append("chapter numbers must be unique and continuous: 01-30")
+    contents = (BOOK / "教材目录.md").read_text(encoding="utf-8")
+    indexed = re.findall(r"^\| (\d{2}) \| \[[^]]+\]\(([^)]+)\) \|$", contents, re.M)
+    if indexed != [(path.name[:2], path.name) for path in chapters]:
+        failures.append("contents numbers, file links and chapter order disagree")
     python_blocks = json_blocks = links = anchor_links = frameworks = 0
     identifiers: list[str] = []
     labs: list[str] = []
     runnable: list[tuple[str, str]] = []
     pytest_examples: list[tuple[str, str]] = []
-    for path in chapters:
+    for chapter_index, path in enumerate(chapters):
         text = path.read_text(encoding="utf-8")
+        title_number = re.match(r"^# 第(\d+)章", text)
+        if not title_number or int(title_number[1]) != int(path.name[:2]):
+            failures.append(f"{path.name}: title number disagrees with filename")
+        if chapter_index and f"[上一章]({chapters[chapter_index - 1].name})" not in text:
+            failures.append(f"{path.name}: previous-chapter navigation")
+        if chapter_index + 1 < len(chapters) and f"[下一章]({chapters[chapter_index + 1].name})" not in text:
+            failures.append(f"{path.name}: next-chapter navigation")
         expected = [(str(i), title) for i, title in enumerate(SECTIONS, 1)]
         if re.findall(r"^## (\d+)\. (.+)$", text, re.M) != expected:
             failures.append(f"{path.name}: eight-section structure")
@@ -86,6 +99,13 @@ def verify(static_only: bool) -> dict:
             # Early language chapters must not depend on function/class definitions.
             if int(path.name[:2]) <= 3 and any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)) for node in ast.walk(tree)):
                 failures.append(f"{label}: function/class used before the function chapter")
+            chapter_number = int(path.name[:2])
+            if chapter_number < 5 and any(isinstance(node, (ast.Try, ast.TryStar, ast.Raise, ast.With, ast.AsyncWith)) for node in ast.walk(tree)):
+                failures.append(f"{label}: exception/context syntax used before chapter 5")
+            if chapter_number < 6 and any(isinstance(node, ast.ClassDef) for node in ast.walk(tree)):
+                failures.append(f"{label}: class definition used before chapter 6")
+            if chapter_number < 11 and any(isinstance(node, (ast.AsyncFunctionDef, ast.Await, ast.AsyncFor, ast.AsyncWith)) for node in ast.walk(tree)):
+                failures.append(f"{label}: asynchronous syntax used before chapter 11")
         for code in re.findall(r"```json\n(.*?)```", text, re.S):
             json_blocks += 1
             try:

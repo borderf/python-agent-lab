@@ -122,7 +122,7 @@ W11 适用于工具需要跨进程或被多个客户端复用的情形。W12–1
 
 ### W08：ProcureAgent 手写单 Agent
 
-配套[工具调用与手写循环](22-ToolCalling与手写AgentLoop.md)和[ProcureAgent 综合项目](28-项目实战二：ProcureAgent审查系统.md)。先用虚构业务 API 验证只读审查。
+配套[工具调用与手写循环](24-ToolCalling与手写AgentLoop.md)和[ProcureAgent 综合项目](26-项目实战二：ProcureAgent审查系统.md)。先用虚构业务 API 验证只读审查。
 
 1. 学：采购样例与审查结果契约。练：区分明确违规、资料不足和没有发现异常。
 2. 学：工具 Schema。练：实现 search_policy/get_project/query_supplier/check_rules 四个只读工具。

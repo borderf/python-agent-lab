@@ -1,10 +1,10 @@
-# 第24章　MCP 与跨系统工具边界
+# 第27章　MCP 与跨系统工具边界
 
-[上一章](23-LangGraph、状态、Checkpoint与人工审核.md) · [全书目录](教材目录.md) · [下一章](25-Multi-Agent的分工、并行与合并.md)
+[上一章](26-项目实战二：ProcureAgent审查系统.md) · [全书目录](教材目录.md) · [下一章](28-Multi-Agent的分工、并行与合并.md)
 
 ## 1. 学习目标与前置知识
 
-理解协议层、编排层和业务后端分工。前置：第14、16、22章。
+理解协议层、编排层和业务后端分工。前置：第14、16、24章。
 
 **承接与本章主线：** 仅在跨进程共享工具需要下标准化发现和调用，保留原有授权与业务契约；协议本身不证明工具安全。
 
@@ -154,4 +154,4 @@ MCP 与 REST/Tool Calling/LangGraph 分别解决什么？什么时候保持本�
 
 官方参考：[本章资料](https://modelcontextprotocol.io/docs/learn/architecture)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
 
-[上一章](23-LangGraph、状态、Checkpoint与人工审核.md) · [下一章](25-Multi-Agent的分工、并行与合并.md)
+[上一章](26-项目实战二：ProcureAgent审查系统.md) · [下一章](28-Multi-Agent的分工、并行与合并.md)
