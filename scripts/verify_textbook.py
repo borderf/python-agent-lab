@@ -71,6 +71,9 @@ def verify(static_only: bool) -> dict:
         numbers = re.findall(r"^### (\d+\.\d+) ", text, re.M)
         if len(numbers) != len(set(numbers)):
             failures.append(f"{path.name}: duplicate subsection number")
+        basic_numbers = [int(value) for value in re.findall(r"^### 2\.(\d+) ", text, re.M)]
+        if basic_numbers != list(range(1, len(basic_numbers) + 1)):
+            failures.append(f"{path.name}: basic subsections must be continuous and ordered")
         labs.extend(re.findall(r"^### (L\d{2})：", text, re.M))
         basics = re.search(r"## 2\. 基础知识讲解\n(.*?)(?=## 3\.)", text, re.S)
         for index, code in enumerate(re.findall(r"```python\n(.*?)```", text, re.S), 1):
