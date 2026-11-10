@@ -16,6 +16,7 @@ def example_02():
 
 def example_03():
     total = 0
+    num = 0
     for num in range(2):
         total += num
     assert total == 1
