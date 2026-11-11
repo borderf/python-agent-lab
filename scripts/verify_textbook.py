@@ -11,6 +11,7 @@ import ast
 from collections import Counter
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -148,10 +149,14 @@ def verify(static_only: bool) -> dict:
     passed = pytest_passed = 0
     if not static_only and not failures:
         with TemporaryDirectory(prefix="textbook-check-", ignore_cleanup_errors=True) as directory:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(ROOT) + (
+                os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             for label, code in runnable:
                 try:
                     result = subprocess.run([sys.executable, "-X", "utf8", "-c", code], cwd=directory,
-                                            capture_output=True, text=True, encoding="utf-8", timeout=20)
+                                            capture_output=True, text=True, encoding="utf-8", timeout=20,
+                                            env=env)
                     if result.returncode:
                         failures.append(f"{label}: {result.stderr[-1400:]}")
                     else:

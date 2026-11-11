@@ -59,7 +59,8 @@ def execute_tool(name, arguments, *, tenant_id, repo):
     visible = [row for row in rows if row.get("tenant_id") == tenant_id]
     if name == "get_paid_total":
         matched = [row for row in visible if row.get("user") == values["user"]]
-        paid = [_order_view(row) for row in matched if row.get("status") == "paid"]
+        views = [_order_view(row) for row in matched]
+        paid = [row for row in views if row["status"] == "paid"]
         return {"ok": True, "data": {
             "user": values["user"], "found": bool(matched), "paid_count": len(paid),
             "paid_amount_cents": sum(row["amount_cents"] for row in paid)}}

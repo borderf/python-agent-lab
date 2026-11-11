@@ -225,7 +225,7 @@ sequenceDiagram
     A-->>U: answer、steps、trace
 ```
 
-**步骤1–5，先固定工具契约与执行边界。** 工具只有名称、参数名和只读标记；租户不属于参数。未知名称、缺参数、额外参数（包括伪造 tenant_id）都必须在调用仓储之前失败，业务函数调用次数为 0。参与汇总的金额必须是整数分，bool、float、字符串和负数一律拒绝；返回给模型的订单只允许 id、user、amount_cents、status，tenant_id、access_token 等内部字段不能出现在工具结果里。
+**步骤1–5，先固定工具契约与执行边界。** 工具只有名称、参数名和只读标记；租户不属于参数。未知名称、缺参数、额外参数（包括伪造 tenant_id）都必须在调用仓储之前失败，业务函数调用次数为 0。参与查询的金额必须是整数分，bool、float、字符串和负数一律拒绝；状态必须在允许集合内，**先验证本次查询涉及的全部记录，再筛选“已支付”**，不能把 `paidd` 悄悄排除。返回给模型的订单只允许 id、user、amount_cents、status，tenant_id、access_token 等内部字段不能出现在工具结果里。
 
 ```python
 from copy import deepcopy
@@ -277,7 +277,8 @@ def execute_tool(name, arguments, *, tenant_id, repo):
     visible = [row for row in rows if row.get("tenant_id") == tenant_id]
     if name == "get_paid_total":
         matched = [row for row in visible if row.get("user") == values["user"]]
-        paid = [_order_view(row) for row in matched if row.get("status") == "paid"]
+        views = [_order_view(row) for row in matched]
+        paid = [row for row in views if row["status"] == "paid"]
         return {"ok": True, "data": {
             "user": values["user"], "found": bool(matched), "paid_count": len(paid),
             "paid_amount_cents": sum(row["amount_cents"] for row in paid)}}

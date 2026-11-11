@@ -75,6 +75,19 @@ def test_s02_execute_returns_structured_data(implementation):
         with pytest.raises(ValueError):
             implementation.execute_tool("get_paid_total", {"user": "Alice"},
                                         tenant_id="a", repo=Repo(rows))
+    bad_status = [{"id": "X1", "tenant_id": "a", "user": "Alice",
+                   "amount_cents": 1, "status": "paidd"}]
+    with pytest.raises(ValueError):
+        implementation.execute_tool("get_paid_total", {"user": "Alice"},
+                                    tenant_id="a", repo=Repo(bad_status))
+    with pytest.raises(ValueError):
+        implementation.execute_tool("get_order", {"order_id": "X1"},
+                                    tenant_id="a", repo=Repo(bad_status))
+    bad_pending = [{"id": "X1", "tenant_id": "a", "user": "Alice",
+                    "amount_cents": "29", "status": "pending"}]
+    with pytest.raises(ValueError):
+        implementation.execute_tool("get_paid_total", {"user": "Alice"},
+                                    tenant_id="a", repo=Repo(bad_pending))
     with pytest.raises(ValueError):
         implementation.execute_tool("get_order", {"order_id": "X1"}, tenant_id="a",
                                     repo=Repo([{"id": "X1", "tenant_id": "a", "user": "Alice",
