@@ -1,0 +1,16 @@
+{
+  "description": "虚构的小型机制题集。holdout只示范分组，真实评测须另冻结合适规模且未参与调参的数据。",
+  "documents": [
+    {"source_id": "a-old", "tenant_id": "a", "version": "1", "title": "付款制度", "text": "预付款比例不得超过30%。", "valid_from": "2026-01-01", "valid_to": "2026-07-01"},
+    {"source_id": "a-current", "tenant_id": "a", "version": "2", "title": "付款制度", "text": "预付款比例不得超过20%。", "valid_from": "2026-07-01", "valid_to": null},
+    {"source_id": "b-current", "tenant_id": "b", "version": "1", "title": "付款制度", "text": "预付款比例不得超过80%。", "valid_from": "2026-01-01", "valid_to": null}
+  ],
+  "cases": [
+    {"case_id": "current", "split": "development", "tenant_id": "a", "as_of": "2026-07-01", "question": "预付款", "expected_source_ids": ["a-current"]},
+    {"case_id": "historical", "split": "development", "tenant_id": "a", "as_of": "2026-06-30", "question": "预付款", "expected_source_ids": ["a-old"]},
+    {"case_id": "no_evidence", "split": "development", "tenant_id": "a", "as_of": "2026-07-01", "question": "天气晴朗", "expected_source_ids": []},
+    {"case_id": "tenant_b", "split": "development", "tenant_id": "b", "as_of": "2026-07-01", "question": "预付款", "expected_source_ids": ["b-current"]},
+    {"case_id": "paraphrase", "split": "holdout", "tenant_id": "a", "as_of": "2026-07-01", "question": "可以先付多少款", "expected_source_ids": ["a-current"]},
+    {"case_id": "unknown_tenant", "split": "holdout", "tenant_id": "c", "as_of": "2026-07-01", "question": "预付款", "expected_source_ids": []}
+  ]
+}

@@ -87,7 +87,8 @@ def simulate_lost_reply(folder: Path) -> None:
 def main() -> None:
     # Keep the self-owned temporary directory inside the known writable lab.
     lab_directory = Path(__file__).resolve().parent
-    with TemporaryDirectory(prefix=".architecture-lesson-", dir=lab_directory) as folder:
+    with TemporaryDirectory(prefix=".architecture-lesson-", dir=lab_directory,
+                            ignore_cleanup_errors=True) as folder:
         path = Path(folder) / "lesson.sqlite"
         db = connect(path)
         try:

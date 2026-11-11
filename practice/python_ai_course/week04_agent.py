@@ -1,4 +1,8 @@
-"""第 16–20 课：内部模型协议与只读订单工具；不绑定具体模型厂商。"""
+"""第 16–20 课：内部模型协议与只读订单工具；不绑定具体模型厂商。
+
+旧版简化 API；正式验收见 tests/learner/contract_agent.py 与第24章 4.2。
+两套签名不同（这里用 orders 位置参数，正式契约用 tenant_id + repo），不要混用。
+"""
 
 from typing import Protocol
 

@@ -39,3 +39,6 @@ architecture = ["psycopg[binary]>=3.2,<4"]
 [[tool.uv.index]]
 url = "http://mirrors.aliyun.com/pypi/simple"
 default = true
+
+[tool.pytest.ini_options]
+norecursedirs = ["pytest-*", "tmp*", "m[0-9]*", "plain-*", ".*", "node_modules", ".venv", "__pycache__"]

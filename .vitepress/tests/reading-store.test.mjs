@@ -28,11 +28,11 @@ test('resume accepts a lesson in this site and validates its position', () => {
 test('the project route goes from retrieval to evaluation and DocPilot', () => {
   const steps = learningPaths.find(item => item.id === 'application').steps
   const index = steps.findIndex(step => step.link.includes('/21-'))
-  assert.ok(steps[index + 1].link.includes('/26-'))
-  assert.ok(steps[index + 2].link.includes('/27-'))
+  assert.ok(steps[index + 1].link.includes('/22-'))
+  assert.ok(steps[index + 2].link.includes('/23-'))
   const agent = learningPaths.find(item => item.id === 'agent').steps
-  const docpilot = agent.findIndex(step => step.link.includes('/27-'))
-  assert.ok(agent[docpilot + 1].link.includes('/22-'))
+  const docpilot = agent.findIndex(step => step.link.includes('/23-'))
+  assert.ok(agent[docpilot + 1].link.includes('/24-'))
   for (const id of ['architecture', 'product']) {
     const route = learningPaths.find(item => item.id === id)
     assert.equal(route.steps.length, 14)

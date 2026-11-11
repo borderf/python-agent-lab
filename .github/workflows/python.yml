@@ -19,9 +19,12 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync --locked --group web --group agent --group vector --group mcp
-      - run: uv run ruff check --select E9,F63,F7,F82 practice/integration_labs tests/test_integration_labs.py tests/test_state_labs.py
-      - run: uv run mypy practice/integration_labs/models.py --follow-imports=silent
-      - run: uv run python -X utf8 scripts/verify_textbook.py
-      - run: uv run python -X utf8 scripts/verify_learning_tracks.py
-      - run: uv run python -m pytest -q
+      - run: uv sync --frozen --group web --group agent --group vector --group mcp
+      - run: uv run --frozen ruff check --select E9,F63,F7,F82 practice/integration_labs practice/learning_projects tests/learner tests/test_learning_service.py tests/test_learning_evaluation.py tests/test_textbook_walkthrough.py tests/test_integration_labs.py tests/test_state_labs.py
+      - run: uv run --frozen mypy practice/integration_labs/models.py --follow-imports=silent
+      - run: uv run --frozen python -X utf8 scripts/verify_textbook.py
+      - run: uv run --frozen python -X utf8 scripts/verify_learning_tracks.py
+      - run: uv run --frozen python -m pytest -q
+      - run: uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module practice.learning_projects.docpilot_reference -q
+      - run: uv run --frozen python -m pytest tests/learner/contract_agent.py --learner-module practice.learning_projects.agent_reference -q
+      - run: uv run --frozen python -m pytest tests/learner/contract_approval.py --learner-module practice.learning_projects.approval_reference -q

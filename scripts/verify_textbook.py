@@ -64,6 +64,8 @@ def verify(static_only: bool) -> dict:
             failures.append(f"{path.name}: eight-section structure")
         if text.count("**本章从这里开始：**") != 1:
             failures.append(f"{path.name}: missing or duplicate opening")
+        if text.count("### 本章累计任务：") != 1:
+            failures.append(f"{path.name}: missing or duplicate cumulative task")
         if text.count("<details>") != 1 or text.count("</details>") != 1:
             failures.append(f"{path.name}: missing or duplicate self-check")
         if len(re.findall(r"^#### 案例推进：", text, re.M)) < 3:
@@ -116,7 +118,8 @@ def verify(static_only: bool) -> dict:
             except ValueError as exc:
                 failures.append(f"{path.name}: JSON {exc}")
     markdown_files = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md")),
-                      *sorted((ROOT / "practice").rglob("*.md"))]
+                      *sorted((ROOT / "practice").rglob("*.md")),
+                      *sorted((ROOT / "tests").rglob("*.md"))]
     for path in markdown_files:
         prose = re.sub(r"```.*?```", "", path.read_text(encoding="utf-8"), flags=re.S)
         prose = re.sub(r"`[^`\n]*`", "", prose)
@@ -144,7 +147,7 @@ def verify(static_only: bool) -> dict:
         failures.append("duplicate code identifier")
     passed = pytest_passed = 0
     if not static_only and not failures:
-        with TemporaryDirectory(prefix="textbook-check-") as directory:
+        with TemporaryDirectory(prefix="textbook-check-", ignore_cleanup_errors=True) as directory:
             for label, code in runnable:
                 try:
                     result = subprocess.run([sys.executable, "-X", "utf8", "-c", code], cwd=directory,

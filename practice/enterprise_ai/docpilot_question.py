@@ -38,6 +38,10 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="local chat model")
     parser.add_argument("--embed-model", help="enable dense + lexical rank fusion")
     args = parser.parse_args()
+    if not args.model.strip():
+        parser.error("--model must not be empty")
+    if args.embed_model is not None and not args.embed_model.strip():
+        parser.error("--embed-model must not be empty when provided")
 
     policies = json.loads((DATA / "policies.json").read_text(encoding="utf-8"))
     # Fixed teaching identity. A web handler must obtain it from authentication.

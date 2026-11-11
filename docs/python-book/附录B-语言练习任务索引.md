@@ -90,7 +90,7 @@ P/L题保留最终契约供后续验收。第2–3章先用直接语句完成值
 | --- | --- | --- |
 | P16 | iter/next/StopIteration、Iterable 与 Iterator | L11：可重复迭代集合与一次性迭代器；手写小范围迭代器 |
 | P17 | yield、生成器表达式、惰性、yield from | L12：流式 JSONL 订单处理，取前几条时不提前解析后面的坏行 |
-| P18 | try/except/else/finally、异常类型、raise from、自定义异常 | L15 的坏记录错误带行号和原始原因；不用返回 [] 掩盖错误 |
+| P18 | try/except/else/finally、异常类型、raise from、自定义异常 | L10 的异常链与 finally 顺序；不用返回 [] 掩盖错误 |
 | P19 | with、__enter__/__exit__、contextmanager、ExitStack | L10：临时打开两个资源，中途失败也清理；理解返回 True 会抑制异常 |
 | P20 | 惰性处理与资源边界、生成器关闭 | 比较生成器返回后文件是否仍可读；调用方提前停止时显式关闭资源，不依赖垃圾回收时机 |
 

@@ -14,6 +14,8 @@
 
 ### 2.1 将前文知识组合成一个用例
 
+现在需要让用户真正查到制度，而非分别展示解析器、向量库和模型。综合项目把来源身份沿每一步传递：原文被解析成块，块进入候选，候选进入提示，答案再引用原文。保留中间对象，是为了在答案错误时找到最先失真的一层，而不是直接换更大的模型。
+
 DocPilot面向有权限的文档上传、字段抽取和证据问答。先限定文档类型、用户范围、业务日期、输出字段和失败行为，不从“做一个万能知识库”开始。使用虚构材料，保留可人工核对的标准结果。
 
 ### 2.2 定义中间数据对象
@@ -23,7 +25,7 @@ Document保存来源、版本、权限和处理状态，Chunk保存文本片段�
 #### 案例推进：用数据对象连接端到端链路
 
 ```python
-# study-example: S27A
+# study-example: S23A
 document = {"id":"D1", "tenant":"a", "version":"v1", "text":"预付款上限20%"}
 chunk = {"id":"D1:v1:0", "document_id":document["id"], "tenant":document["tenant"],
          "version":document["version"], "text":document["text"]}
@@ -72,61 +74,229 @@ assert response == {"status":"evidence_found", "source_ids":["D1:v1:0"]}
 
 ## 4. 示例与逐步走查
 
-### DocPilot 固定演示
+### 4.1 从空文件写出第一条可验证链路
 
-输入tenant-a、业务日期2026-10-01和问题“预付款上限是多少”；从policy-a-current返回20%及有效版本证据。换到2026-06-01应引用policy-a-old回答30%；询问另一租户规则不得暴露其材料。
+前面分别学习模型、资料、检索和评测，现在不再跳到完整参考服务。新建 `learner_docpilot.py`，用四个函数串起同一条数据流：规范化→索引→检索→证据回答。首次采用等长文本块和字符二元组检索，让行为可手算；它们是基线，不冒充语义检索。
 
-记录三条请求的检索来源、最终引用和错误/拒绝原因。这三条是种子案例，不足以取代20–30条标注集，也不能证明真实政策正确性。
+```mermaid
+flowchart LR
+    A[原始资料] --> B[规范化与区间]
+    B --> C[有偏移的稳定片段]
+    C --> D[先租户日期过滤]
+    D --> E[排序与截断]
+    E --> F[本次证据]
+    F --> G[模型候选]
+    G --> H[结构与引用检查]
+```
 
-### 4.1 沿输入到结果逐步解释
+先按下面每步的契约自己实现，再对照每组累计代码找首个分叉。四组代码依次写在同一个文件，后组调用前组函数，不能当作四个互不相关的示例。这里的导入均来自标准库，不需要模型账户或向量服务。
 
-固定身份tenant-a、日期2026-10-01时应检索当前20%条款；换为2026-06-01则使用历史30%条款。两次变化只来自业务日期，材料与引用应能说明差异；另一租户材料不得进入前者提示。
+每完成一步，运行下列命令，把最后的1改成当前步骤号：
+
+```powershell
+uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module learner_docpilot --through-step 1 -q
+```
+
+较后步骤显示 deselected，前面步骤继续回归。用参考模块运行只能证明基线，自己的结果保留实际模块名。[完整契约与失败定位](../../tests/learner/练习说明.md)
+
+### 4.2 步骤1–6：让资料先成为可靠输入
+
+**步骤1，建立来源模型。** 输入必须恰好包含 source_id、tenant_id、version、title、text、valid_from、valid_to。前五项是非空文本，返回新字典，输入不变。为什么先做这个？若来源或租户缺失，后面再正确排序也无法解释答案属于谁。先用首尾空白和空文本验证。
+
+**步骤2，明确生效区间。** 日期用 YYYY-MM-DD，valid_to 可空且必须晚于 valid_from。把区间定义为左闭右开，7月1日切换时旧版不再有效。日期规范化后才能按相同格式比较文本；不能拿任意日期字符串排序。下面是前两步的累计实现。
+
+```python
+from copy import deepcopy
+from datetime import date
+import json
+
+def _text(value, name):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be nonempty text")
+    return value.strip()
+
+def _date(value):
+    if not isinstance(value, str):
+        raise ValueError("date must be ISO text")
+    parsed = date.fromisoformat(value)
+    if parsed.isoformat() != value:
+        raise ValueError("date must use YYYY-MM-DD")
+    return value
+
+def normalize_document(raw):
+    fields = {"source_id", "tenant_id", "version", "title", "text", "valid_from", "valid_to"}
+    if not isinstance(raw, dict) or set(raw) != fields:
+        raise ValueError("unexpected document fields")
+    result = {key: _text(raw[key], key) for key in fields - {"valid_from", "valid_to"}}
+    result["valid_from"] = _date(raw["valid_from"])
+    result["valid_to"] = None if raw["valid_to"] is None else _date(raw["valid_to"])
+    if result["valid_to"] is not None and result["valid_to"] <= result["valid_from"]:
+        raise ValueError("invalid validity interval")
+    return result
+```
+
+**步骤3，建立片段身份。** 先一份文档一个块，让 source_id、tenant_id、version 和 chunk_id 跟随正文。不要只保存一段文本，否则后面无法回到特定版本。
+
+**步骤4，保存定位。** 将“甲乙丙丁戊己庚”每3个码点切一块，得到甲乙丙、丁戊己、庚。每块记录 start、end，必须等于规范化全文的该切片。这里不是UTF-8字节偏移，也不是PDF页码；转换到PDF时另建定位。
+
+**步骤5，保证稳定与隔离。** 相同输入再次索引应得到相同ID；同一来源的不同位置不能冲突；不能修改输入。将长度设为0或True必须拒绝，因为True虽然可参与整数运算，却不是本接口允许的长度。
+
+**步骤6，区分重复和冲突。** 同租户、同来源、同版本的相同内容只建一次；不同内容报错，不能覆盖成“最新”。不同租户允许同名来源。这里的索引是一次构建；真实增量入库还要实现持久唯一键和更新事务。
+
+```python
+def build_index(documents, chunk_chars=120):
+    if type(chunk_chars) is not int or chunk_chars < 1:
+        raise ValueError("chunk_chars must be a positive integer")
+    sources = {}
+    for raw in documents:
+        document = normalize_document(raw)
+        key = (document["tenant_id"], document["source_id"], document["version"])
+        if key in sources and sources[key] != document:
+            raise ValueError("same source version has different content")
+        sources[key] = document
+    chunks = []
+    for key, document in sorted(sources.items()):
+        for start in range(0, len(document["text"]), chunk_chars):
+            end = min(start + chunk_chars, len(document["text"]))
+            # JSON encoding avoids collisions caused by delimiters inside IDs.
+            chunk_id = json.dumps([*key, start], ensure_ascii=False, separators=(",", ":"))
+            chunks.append({**document, "text": document["text"][start:end],
+                           "start": start, "end": end, "chunk_id": chunk_id})
+    return chunks
+```
+
+先运行到第6步，检查片段原文与偏移，再继续。等长分块会切断语义；本阶段先暴露这一限制，第20–21章再基于失败样本比较分块和召回策略。
+
+### 4.3 步骤7–12：先限制范围，再讨论相关性
+
+**步骤7，先按可信租户过滤。** 核心函数接收服务端已经确定的 tenant_id，只让该范围进入排名。测试把其他租户资料放在前面，再取 top1；如果先截断再过滤，就会漏掉本租户结果。核心过滤通过还不证明HTTP入口认证正确。
+
+**步骤8，过滤适用日期。** 旧版适用到7月1日前，新版从7月1日起。用6月30日与7月1日的相同问题检验；仅改一个条件，才能定位日期边界。
+
+**步骤9，建立可手算分数。** “预付款”二元组是“预付”“付款”。与标题和正文生成的词项集合求交集并计数。共有两项比只有“付款”的一项排前；这不是embedding，不具备可靠同义理解。
+
+**步骤10，限制候选预算。** limit只接受1–10的整数，排除bool。先得到合法范围的排名，再截断。预算既影响费用也影响召回，不能让客户端任意放大。
+
+**步骤11，允许空结果。** 与“天气晴朗”没有公共词项时返回空，不为凑满top-k加入无关材料。无依据是合法业务结果；网络或模型异常则是另一类失败。
+
+**步骤12，消除并列与共享的不确定性。** 同分按来源、版本和起点排序，输入顺序反转仍一致。返回独立数据，调用者修改结果不能改坏索引。至此使用第1章名称与对象、第3章复制知识保护跨请求状态。
+
+```python
+def _terms(text):
+    normalized = "".join(text.lower().split())
+    return {normalized[i:i + 2] for i in range(len(normalized) - 1)}
+
+def search(index, question, *, tenant_id, as_of, limit=3):
+    question = _text(question, "question")
+    tenant_id = _text(tenant_id, "tenant_id")
+    as_of = _date(as_of)
+    if len(question) < 2 or type(limit) is not int or not 1 <= limit <= 10:
+        raise ValueError("question too short or limit outside 1..10")
+    query_terms = _terms(question)
+    scored = []
+    for chunk in index:
+        if chunk["tenant_id"] != tenant_id:
+            continue
+        if chunk["valid_from"] > as_of or (chunk["valid_to"] is not None and as_of >= chunk["valid_to"]):
+            continue
+        score = len(query_terms & _terms(chunk["title"] + chunk["text"]))
+        if score:
+            scored.append((score, chunk))
+    scored.sort(key=lambda row: (-row[0], row[1]["source_id"], row[1]["version"], row[1]["start"]))
+    return [deepcopy(chunk) for _, chunk in scored[:limit]]
+```
+
+运行到第12步，手画“过滤前→过滤后→排名→截断”。如果结果不对，先找资料是否曾进入候选，不要马上更换模型。
+
+### 4.4 步骤13–20：让模型成为受检验的候选来源
+
+**步骤13，只把本次可见证据送给模型。** 定义回调 `model(question, evidence)`，先用替身逐字返回第一个片段与chunk_id。模型协议与业务函数分开，之后可以替换实际调用适配器。
+
+**步骤14，无证据不调用模型。** 此时程序直接返回说明、空引用和needs_review=True。测试中的模型回调一旦被调用就报错，证明拒答来自程序路径，而不是寄希望于提示。
+
+**步骤15，检查候选结构。** 只接受answer、citations、needs_review；文本非空，复核标记必须是真正bool。字符串“false”不能按真假转换，否则非空字符串反而为真。额外tenant_id一律拒绝。
+
+**步骤16，引用只能来自本次证据。** 不能仅到全库查询某个ID存在就接受；它可能属于其他租户、其他日期或未送入模型的资料。
+
+**步骤17，逐字核对引用。** quote必须在指定片段中，空白引用拒绝。它证明位置，不证明支持结论：“上限20%”配回答“允许80%”仍应被人工语义评分判错。
+
+**步骤18，处理重复与缺依据。** 相同引用不得重复，无引用不能标为无需复核。允许有引用却仍需复核，因为资料可能不足以完成整个任务。
+
+**步骤19，保存可信依据并暴露故障。** 模型回调得到证据副本，校验使用另一份可信快照。回调超时继续抛给服务层，不能悄悄换替身或返回“没找到”。真实适配器还要记录实际模型、用量与结束原因。
+
+**步骤20，交替上下文做整体验收。** 在同一个索引上依次查A历史、B当前、A当前与无资料租户，结果分别来自30%、80%、20%与无证据。这检查组合后没有残留上一请求的范围。最后换一组金额和生效日期重做。
+
+```python
+def answer(index, question, *, tenant_id, as_of, model):
+    evidence = search(index, question, tenant_id=tenant_id, as_of=as_of)
+    if not evidence:
+        return {"answer": "当前可访问资料中没有找到依据。", "citations": [], "needs_review": True}
+    # Keep the trusted evidence independent of a callback's mutable arguments.
+    generated = model(question, deepcopy(evidence))
+    if not isinstance(generated, dict) or set(generated) != {"answer", "citations", "needs_review"}:
+        raise ValueError("unexpected answer fields")
+    text = _text(generated["answer"], "answer")
+    if type(generated["needs_review"]) is not bool or not isinstance(generated["citations"], list):
+        raise ValueError("invalid review flag or citations")
+    by_id = {chunk["chunk_id"]: chunk for chunk in evidence}
+    citations, seen = [], set()
+    for citation in generated["citations"]:
+        if not isinstance(citation, dict) or set(citation) != {"chunk_id", "quote"}:
+            raise ValueError("unexpected citation fields")
+        chunk_id, quote = citation["chunk_id"], citation["quote"]
+        if not isinstance(chunk_id, str) or chunk_id not in by_id:
+            raise ValueError("citation outside evidence")
+        if not isinstance(quote, str) or not quote.strip() or quote not in by_id[chunk_id]["text"]:
+            raise ValueError("quote absent from source")
+        if (chunk_id, quote) in seen:
+            raise ValueError("duplicate citation")
+        seen.add((chunk_id, quote))
+        chunk = by_id[chunk_id]
+        citations.append({**citation, "source_id": chunk["source_id"], "version": chunk["version"],
+                          "start": chunk["start"], "end": chunk["end"]})
+    if not citations and not generated["needs_review"]:
+        raise ValueError("uncited answer must require review")
+    return {"answer": text, "citations": citations, "needs_review": generated["needs_review"]}
+```
+
+以上累计代码是一种可读基线，不要求你的内部实现相同。20项契约通过证明已覆盖行为；它们没有证明真实语义检索、引用支持结论、入口认证或生产性能。
+
+### 4.5 将同一个核心接到HTTP，而不是重写业务
+
+先完成自己的核心，再设置模块名：
+
+```powershell
+uv sync --frozen --group web --inexact
+$env:LEARNER_MODULE = 'learner_docpilot'
+uv run --frozen --group web uvicorn practice.learning_projects.service:create_app --factory --host 127.0.0.1 --port 8011
+```
+
+打开 `http://127.0.0.1:8011/docs`，使用教学令牌demo-a或demo-b授权。向 `/api/questions` 发送 question“预付款”和as_of“2026-07-01”，换历史日期与另一令牌核对结果。请求体不允许自报tenant_id。该切片明确使用内存索引和替身，重启重建，不是完整登录或持久系统。
+
+[HTTP适配器](../../practice/learning_projects/service.py)只处理请求模型、可信教学身份和错误映射：超时返回504，坏模型输出返回502，无证据是正常复核结果。业务核心继续使用你的四个函数。把一个边界换成真实模型时，重新验同一组行为，不将模式切换隐藏在默认回退中。
+
+完成契约后，用[逐题评测入口](../../tests/learner/练习说明.md#从契约检查继续做逐题评测)对自己的模块导出开发题与留出题，保留失败，不把替身结果当真实质量。随后按[项目装配](../project-practice/从实验到项目交付.md)接持久资料、PDF、真实模型、向量、反馈与部署。保留每层中间结果；这部分是20步核心之外的产品交付，不因核心全绿而自动完成。
 
 ## 5. 动手练习
 
-### 里程碑一：可定位的知识源
+### 本章累计任务：从空文件累计完成DocPilot
 
-用5份虚构文档完成导入、解析、版本和访问控制，手工核对文本块。给出20条包含当前、历史、无证据和越权的问题及标准证据。
+按本章20步写自己的模块，用明确模块名验收，再用一份新资料与另一组日期重做。最后接同一核心到HTTP与用户来源页。
 
-### 里程碑二：可评测的问答
+**未通过时怎样定位：** 参考基线通过不是自己的完成证据；20步核心不含完整生产功能；语义评分、认证与部署分别补证据。
 
-先交关键词基线，再加入生成和向量方案，导出逐题候选、答案与引用。每条引用可回原文，无证据不得编造；至少展示一次从错误定位到修复回归。
+**带到下一步：** 若任务只需查证，可以在此交付；需要动作时进入第24章。
 
-### 里程碑三：可复现交付
+下方专题练习用于补当前卡点；先完成这一项累计任务，不另将所有索引作为必须并行完成的进度。
 
-提供接口、依赖锁、配置说明、数据与索引构建命令、评测导出和启动方式。独立环境演示成功、无证据和越权三类请求；[项目路线](附录E-项目里程碑与交付检查.md)用于扩展，未完成项明确标注。
 
-### 先运行一条完整的问答，再逐层替换
+### 从核心到产品的一次独立交付
 
-沿用第 21 章准备好的本机模型。下面两条命令询问同一个问题，分别取生效边界前后的制度。第一条走字面检索，第二条可用字面和稠密融合。研究日期或检索策略对结果的影响时，每次只改其中一个参数。
+换一份首次见到且有权使用的材料，完成规范化、索引、提问与原文核对；再用无相关条款的材料重做。接HTTP后分别检查正常、无证据、坏输入与未知身份；后续真实模型、持久化和部署按装配手册逐项补证据。
 
-```powershell
-uv run python -m practice.enterprise_ai.docpilot_question '本租户预付款比例上限是多少？' --as-of 2026-06-30 --model $chatModel
-uv run python -m practice.enterprise_ai.docpilot_question '本租户预付款比例上限是多少？' --as-of 2026-07-01 --model $chatModel --embed-model $embedModel
-```
+用[评测方法](../project-practice/评测与故障演练.md)准备开发题与未参与调参的题，人工标注引用是否支持结论。请另一人独立完成陌生查证任务，记录求助、错误、总耗时与一次修复；没有真实观察时写尚未验证。
 
-先看 candidates，再看 answer 与 citations。第一题的支持条款是旧版 30%，第二题是新版 20%。程序核对每个引用都在本次送入模型的来源中、quote 可在该原文中找到；你负责核对它能否支持具体结论。如果金额答错但引文真实存在，记为事实失败。再问“多少金额必须公开招标”，本语料欠缺相关依据，记录答复是否进入复核。示例固定 tenant-a，用一问一答命令隔离检索与生成链路；沿下表把相同逻辑接到文档导入、服务端身份、HTTP 与用户界面。[问答实现](../../practice/enterprise_ai/docpilot_question.py)
-
-### 从第一条请求装配出可交付的一版
-
-先选一个可手算的问题：“2026-07-01 起，本租户的合同预付款上限是多少？”同一问题在前一天要得到另一个答案。让每一层先返回可检查的中间结果，再接下一层。[接口与来源契约](../project-practice/项目实践规格.md)
-
-| 依次接通的部分 | 你亲手做的最小实现 | 停下来检查什么 |
-| --- | --- | --- |
-| 来源与索引 | 从虚构制度读入来源、版本、生效区间、节名与原文。先按节生成稳定标识。再上传一份自己制作的文本 PDF，把页码与提取文本人工对齐 | 同一版本重复导入没有重复块；空页进入待复核；JSON 的引用可以落到节名 |
-| 检索接口 | 先接 `POST /api/search`，认证上下文提供租户，查询传业务日期。先返回排序后的来源与片段，再加入向量索引 | 6 月 30 日付款条款为旧版 30%，7 月 1 日为新版 20%。对全部候选检查租户和区间 |
-| 回答与引用 | `POST /api/questions` 复用同一检索函数。模型适配器输入问题与证据，校验输出引用的 ID，再核对原文是否支持数字 | 用替身返回一个不存在的 ID，进入失败或复核路径。真实模型另跑同题，保存实际版本、答案、用量与延迟 |
-| 用户与发布 | 结果页提供可打开的来源、适用日期及反馈入口。让另一人从干净环境启动，独立完成刚才的任务 | 看他是否能指出依据。只有答案正确、引用指向旧版时，记为任务失败，分别定位检索和展示层 |
-
-**追一条坏样本。** 假设答案是 30%。先查索引里是否有新版，再看该请求可见候选是否含旧版、送进模型的是哪段、界面展示的是哪版。如果候选就错，先修日期边界；如果提示和引用正确而文字错误，把这条输入送进模型回归；如果后端正确而界面错误，检查旧请求覆盖和缓存范围。修复后分别重跑历史日期、新版和无依据题。把请求标识、首个出错层和修复前后结果写进交付说明。
-
-**零到一的独立验收。** 用一份首次见到的文档，从空索引执行导入、提问、查看原文、提交反馈，记录每一步的命令或用户动作。再用一份缺字段或无相关条款的文档重做。第一次能定位失败的层、第二次能改代码并证明旧题仍通过，才完成本阶段。运行[检索开发集与留出集](../project-practice/评测与故障演练.md#先跑一个离线对照)后，把人工核对的引用支持性和实际调用成本附在报告里。
-
-### 累计交付：知识问答交付
-
-当前任务：用户提交问题、找到适用来源并能打开核对；无证据、历史版本、撤权和坏输出各有行为。
-
-继续之前：完成DocPilot后可先做AI应用岗位反馈；有动作需求再进入第24章，不先被协议或多角色阻塞。
+交付只需一页索引：自己的模块与20步命令、服务入口、数据与模型版本、逐题结果、失败修复和已知限制。任务只需查证时在此交付；需要动作再进入第24章。
 
 ## 6. 验收与自测
 
@@ -135,8 +305,6 @@ uv run python -m practice.enterprise_ai.docpilot_question '本租户预付款比
 **行为验收：** 新环境可复现；引用正确；权限不越界；模型/数据版本可定位；记录已知限制。
 
 **原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
-
-**提交证据：** 实现位置、运行命令、正常案例、至少一个错误/边界案例、一次失败原因和修复记录。自动检查只证明其覆盖行为；未实现任务不因示例通过而算完成。
 
 ### 6.1 先预测，再查看参考推导
 
@@ -152,8 +320,6 @@ uv run python -m practice.enterprise_ai.docpilot_question '本租户预付款比
 ## 7. 面试问答与迁移
 
 用五分钟讲清DocPilot架构、一个失败案例及一次实际改进，展示前后指标而非泛泛“效果提升”。
-
-回答顺序：定义与边界 → 机制 → 小例子 → 项目影响 → 验证方式。不确定的实现细节明确说明版本和查证办法。
 
 ## 8. 本章小结与参考
 

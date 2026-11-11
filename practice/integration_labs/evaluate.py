@@ -31,7 +31,7 @@ def main():
     if args.trials < 1:
         parser.error("trials must be positive")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix="evaluation-") as directory:
+    with TemporaryDirectory(prefix="evaluation-", ignore_cleanup_errors=True) as directory:
         url = database_url(Path(directory) / "trial.sqlite")
         migrate(url)
         seed(url)

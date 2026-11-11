@@ -9,9 +9,9 @@
 准备隔离的教学数据库及其连接配置，安装 architecture 依赖组。实验会创建唯一的 course_ 前缀 schema，结束时清理自己创建的 schema。当前账户需要相应建表权限。
 
 ```powershell
-uv sync --locked --group architecture --inexact
+uv sync --frozen --group architecture --inexact
 # LAB_POSTGRES_DSN 由本机环境提供，避免把密码写进教材或提交到仓库。
-uv run --group architecture python -m practice.integration_labs.postgres_race
+uv run --frozen --group architecture python -m practice.integration_labs.postgres_race
 ```
 
 A、B 先分别读到版本 7。A 条件更新成功后提交，B 用版本 7 更新影响 0 行。先预测去掉 WHERE version=7 的后果，再在练习副本验证，并把 0 行结果映射为明确的竞争响应。
@@ -21,7 +21,7 @@ A、B 先分别读到版本 7。A 条件更新成功后提交，B 用版本 7 �
 ## 从稳定到突发的排队实验
 
 ```powershell
-uv run python -m practice.integration_labs.capacity
+uv run --frozen python -m practice.integration_labs.capacity
 ```
 
 程序有两个 worker，每个服务时间设为 40 毫秒，等待队列最多四项。分别发送稳定与突发的 20 个请求，记录完成、拒绝、排队和端到端时间。总请求应等于完成加拒绝，拒绝项始终保留在原始记录中。先根据均值估算容量，再看实际调度和突发如何改变结果。
@@ -37,7 +37,7 @@ uv run python -m practice.integration_labs.capacity
 DocPilot 的 001 版本保存资料与回答，002 增加反馈。先在旧结构写入样例，再升级并读取同一批资料。对应回归会检查这条路径。
 
 ```powershell
-uv run --group web python -m pytest tests/test_integration_labs.py -q -k migration
+uv run --frozen --group web python -m pytest tests/test_integration_labs.py -q -k migration
 ```
 
 自己增加一个有业务含义的字段，例如资料负责人。按新增兼容字段、分批回填、核对、切换读取、收缩旧字段推进。模拟旧实例仍在读和回填进行一半时停止。记录哪些步骤可以回滚，哪些需要前向修复；恢复到隔离库后核对资料、回答与反馈的关联。

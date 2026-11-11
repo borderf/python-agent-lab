@@ -36,6 +36,8 @@ def main() -> int:
     original = verify_original(static_only=True)
     failures = list(original["failures"])
     chapters_by_book = {}
+    examples = []
+    example_ids = set()
     for name in BOOKS:
         folder = ROOT / "docs" / name
         chapters = sorted(p for p in folder.glob("[0-9][0-9]-*.md")
@@ -57,6 +59,18 @@ def main() -> int:
             subsections = re.findall(r"^### (\d+\.\d+) ", text, re.M)
             if len(subsections) != len(set(subsections)):
                 failures.append(f"{path.name}: duplicate subsection")
+            for code in re.findall(r"```python\n(.*?)```", text, re.S):
+                try:
+                    ast.parse(code, filename=str(path))
+                except SyntaxError as error:
+                    failures.append(str(error))
+                marker = re.search(r"^# track-example: ([AP]\d{2})$", code, re.M)
+                if marker:
+                    identifier = marker.group(1)
+                    if identifier in example_ids:
+                        failures.append(f"duplicate track example: {identifier}")
+                    example_ids.add(identifier)
+                    examples.append((f"{name}:{identifier}", code))
     for area in ("enterprise_ai", "architecture_labs", "product_labs", "integration_labs"):
         for path in (ROOT / "practice" / area).rglob("*.py"):
             try:
@@ -64,7 +78,20 @@ def main() -> int:
             except SyntaxError as error:
                 failures.append(str(error))
     passed = []
+    examples_passed = []
     if not args.static_only and not failures:
+        for label, code in examples:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-X", "utf8", "-c", code], cwd=ROOT,
+                    capture_output=True, text=True, encoding="utf-8", timeout=20,
+                )
+                if result.returncode:
+                    failures.append(f"{label}: {result.stderr[-1400:]}")
+                else:
+                    examples_passed.append(label)
+            except subprocess.TimeoutExpired:
+                failures.append(f"{label}: timeout")
         for filename in EXERCISES:
             try:
                 result = subprocess.run(
@@ -83,6 +110,7 @@ def main() -> int:
         "repository_anchor_links": original["anchor_links"],
         "original_example_sha256": original["example_sha256"],
         "static_only": args.static_only, "exercises_passed": passed,
+        "worked_examples_passed": examples_passed,
         "failures": failures,
         "not_verified": ["browser layout/interaction", "external services", "production", "real users"],
     }, ensure_ascii=False, indent=2))

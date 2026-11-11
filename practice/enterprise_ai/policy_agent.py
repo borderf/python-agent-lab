@@ -92,6 +92,8 @@ def main() -> int:
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--compare", action="store_true", help="compare two prompts on identical cases")
     args = parser.parse_args()
+    if args.model is not None and not args.model.strip():
+        parser.error("--model must not be empty; omit it to use the fixture")
     if args.trials < 1:
         parser.error("--trials must be positive")
     policies = json.loads((DATA / "policies.json").read_text(encoding="utf-8"))

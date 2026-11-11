@@ -78,6 +78,10 @@ def main() -> None:
     parser.add_argument("--rerank-model", help="optional local chat model for listwise reranking")
     parser.add_argument("--split", choices=("dev", "holdout"), default="dev")
     args = parser.parse_args()
+    if not args.embed_model.strip():
+        parser.error("--embed-model must not be empty")
+    if args.rerank_model is not None and not args.rerank_model.strip():
+        parser.error("--rerank-model must not be empty when provided")
     policies = json.loads((DATA / "policies.json").read_text(encoding="utf-8"))
     cases = json.loads((DATA / "retrieval_cases.json").read_text(encoding="utf-8"))
     cases = [case for case in cases if case.get("split", "dev") == args.split]

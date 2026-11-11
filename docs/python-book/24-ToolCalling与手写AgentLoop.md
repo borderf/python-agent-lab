@@ -14,6 +14,8 @@
 
 ### 2.1 从模型建议到程序执行
 
+模型输出“查询订单”只是一段候选指令，和真正计算仍隔着执行边界。程序要判断名称是否存在、参数是否有效、主体能否访问，然后调用真实函数。执行结果必须带回对应调用标识，下一轮模型才是在观察事实，而非把自己上一轮的意图当作已经发生的动作。
+
 先让程序直接调用一次get_project，确认它能取得项目。再让模型面对同一个问题：模型只提出工具名称和参数，程序先校验参数与身份，再实际执行，最后把结果回传给模型。Tool Calling描述的就是这段请求与执行交互。工具说明与Schema帮助模型表达请求，真正的业务授权仍在程序和资源服务中执行。
 
 先用代码直接运行工具，确认数据、错误和单位正确，再让模型参与选择。否则工具执行错误和模型决策错误会混在一起。
@@ -39,7 +41,7 @@
 #### 案例推进：先用假模型验证最小闭环
 
 ```python
-# study-example: S22A
+# study-example: S24A
 from copy import deepcopy
 calls = []
 def supplier_name(arguments):
@@ -75,7 +77,7 @@ assert calls == ["S1"]
 
 #### 案例推进：同一道查制度题，先跑工具协议再接模型
 
-沿用第18章2.5准备的本地Ollama服务。先运行 `uv run python -m practice.enterprise_ai.policy_agent`。打开一行输出，从 `trace` 找到实际调用过的工具，从 `answer` 找到上限及来源，再看 `supported` 如何比较二者。替身固定先发工具请求、再读取程序送回的结果。把日期从 2026-06-01 换到 2026-07-01，预测同一业务函数会返回哪一版。本章继续用真实模型替换作决定的替身。
+沿用第18章2.5准备的本地Ollama服务。先运行 `uv run --frozen python -m practice.enterprise_ai.policy_agent`。打开一行输出，从 `trace` 找到实际调用过的工具，从 `answer` 找到上限及来源，再看 `supported` 如何比较二者。替身固定先发工具请求、再读取程序送回的结果。打开 `practice/enterprise_ai/data/retrieval_cases.json`，把 `historical_limit` 的 `as_of` 从 2026-06-01 改成 2026-07-01，预测同一业务函数会返回哪一版（`policy_agent` 当前没有日期参数，日期来自夹具）。本章继续用真实模型替换作决定的替身。
 
 **消息流。** 模型提出 `get_prepayment_limit({})`，服务端从任务上下文取得租户和日期，执行查询并追加 tool 消息，模型再给最终 JSON。输入证据缺失、结构解析失败、数字与证据不符分别由不同层报告。追踪保留工具名、来源和可取得的用量，评测标签仅在调用结束后使用。先能手画这两轮消息，再对照本章的执行器与循环边界。[配套参考实现](../../practice/enterprise_ai/policy_agent.py) · [Ollama 消息与工具协议](https://docs.ollama.com/capabilities/tool-calling)
 
@@ -102,7 +104,7 @@ ReAct类思路强调行动与观察反馈，工程中记录可审核的决策和
 下面故意使用字符数演示装箱算法，不是token计数器，也不能用于计费。预算放不下必要约束时明确失败，不悄悄删除约束后继续执行。
 
 ```python
-# study-example: S22B
+# study-example: S24B
 def pack_context(required, candidates, budget):
     if type(budget) is not int or budget < 0:
         raise ValueError("budget必须为非负整数")
@@ -129,7 +131,7 @@ required包含当前可信约束与任务，并不使任意用户文本都获得
 多个工具结果还必须严格对应调用。返回顺序可能不同于请求顺序，使用call_id关联，而不是默认第一个结果属于第一个工具。
 
 ```python
-# study-example: S22C
+# study-example: S24C
 def correlate(requests, results):
     wanted = [request["call_id"] for request in requests]
     received = [result["call_id"] for result in results]
@@ -180,9 +182,202 @@ else:
 
 ### 4.1 沿输入到结果逐步解释
 
-第一轮请求get_paid_total只是意图。程序验证Alice参数后实际汇总，再将79800分绑定C1回传，第二轮才据此组织说明。若第一轮直接输出“已查得”，就缺少执行和观察两个步骤。
+第一条JSON表示模型想调用get_paid_total，并给出了call_id=C1。应用先查工具注册和参数，再用可信身份限定访问，真实计算后得到79800分。
+
+返回消息带同一C1，是为了让下一轮把结果关联到这次查询。若工具没有执行却直接生成“已查询”，结论即使碰巧正确，也无法证明系统完成任务；若结果误标成另一调用ID，则模型可能使用错证据。
+
+工具失败也应回传可区分错误，不能把超时当成已支付金额0。这样下一轮才有条件停止、复核或采取受限的下一步。
+
+### 4.2 从零 12 步：写出可验收的工具循环
+
+上一节解释了机制，这一节把它变成一项可独立完成的工程。2.3 的玩具为了先看闭环省略了 call_id；正式契约每轮都要求唯一 call_id，即使只有一个工具。新建 `learner_agent.py`，只需要标准库；每完成一步，用同一组契约检查：
+
+```powershell
+uv run --frozen python -m pytest tests/learner/contract_agent.py --learner-module learner_agent --through-step 1 -q
+```
+
+把 `--through-step` 从 1 推到 12，前面步骤持续回归，未到达的步骤显示 deselected，不是通过。契约与完整提示见[学习者验收](../../tests/learner/练习说明.md#工具循环契约agent)。下面的四段累计代码依次写入同一文件，后一组调用前一组函数。
+
+| 步骤 | 契约 | 检查什么 |
+| --- | --- | --- |
+| 1 | s01 | 工具名称、参数与只读标记 |
+| 2–5 | s02–s05 | 执行结果、未知工具、参数、租户与字段白名单 |
+| 6–7 | s06–s07 | 只接受 tool_call / final 两种结构 |
+| 8–9 | s08–s09 | 循环、call_id、tool 消息与 trace |
+| 10–12 | s10–s12 | 预算、重复 call_id、坏决策与 final |
+
+```mermaid
+sequenceDiagram
+    participant U as 用户问题
+    participant A as 程序 run
+    participant M as 模型
+    participant T as 工具执行
+    participant R as 可信仓储
+    U->>A: question 与服务端 tenant_id
+    A->>M: messages
+    M-->>A: tool_call C1
+    A->>T: 校验名称、参数与租户
+    T->>R: repo.all()
+    R-->>T: 本租户可见记录
+    T-->>A: {ok, data}
+    A->>M: tool 消息 C1 + 结果
+    M-->>A: final
+    A-->>U: answer、steps、trace
+```
+
+**步骤1–5，先固定工具契约与执行边界。** 工具只有名称、参数名和只读标记；租户不属于参数。未知名称、缺参数、额外参数（包括伪造 tenant_id）都必须在调用仓储之前失败，业务函数调用次数为 0。参与汇总的金额必须是整数分，bool、float、字符串和负数一律拒绝；返回给模型的订单只允许 id、user、amount_cents、status，tenant_id、access_token 等内部字段不能出现在工具结果里。
+
+```python
+from copy import deepcopy
+
+TOOLS = {
+    "get_paid_total": {"readonly": True, "parameters": ("user",)},
+    "get_order": {"readonly": True, "parameters": ("order_id",)},
+}
+ORDER_FIELDS = ("id", "user", "amount_cents", "status")
+ORDER_STATUSES = {"paid", "pending", "cancelled"}
+
+def _text(value, name):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be nonempty text")
+    return value.strip()
+
+def _cents(value, order_id):
+    if type(value) is not int or value < 0:
+        raise ValueError(f"order {order_id} has invalid amount_cents")
+    return value
+
+def _order_view(row):
+    missing = [field for field in ORDER_FIELDS if field not in row]
+    if missing:
+        raise ValueError("order missing required fields")
+    order_id = _text(row["id"], "id")
+    user = _text(row["user"], "user")
+    status = row["status"]
+    if not isinstance(status, str) or status not in ORDER_STATUSES:
+        raise ValueError(f"order {order_id} has invalid status")
+    return {"id": order_id, "user": user,
+            "amount_cents": _cents(row["amount_cents"], order_id), "status": status}
+
+def tool_specs():
+    return {name: {"readonly": spec["readonly"], "parameters": list(spec["parameters"])}
+            for name, spec in TOOLS.items()}
+
+def _arguments(arguments, expected):
+    if not isinstance(arguments, dict) or set(arguments) != set(expected):
+        raise ValueError("arguments do not match the tool contract")
+    return {name: _text(arguments[name], name) for name in expected}
+
+def execute_tool(name, arguments, *, tenant_id, repo):
+    tenant_id = _text(tenant_id, "tenant_id")
+    if name not in TOOLS:
+        raise ValueError("unknown tool")
+    values = _arguments(arguments, TOOLS[name]["parameters"])
+    rows = [deepcopy(row) for row in repo.all()]
+    visible = [row for row in rows if row.get("tenant_id") == tenant_id]
+    if name == "get_paid_total":
+        matched = [row for row in visible if row.get("user") == values["user"]]
+        paid = [_order_view(row) for row in matched if row.get("status") == "paid"]
+        return {"ok": True, "data": {
+            "user": values["user"], "found": bool(matched), "paid_count": len(paid),
+            "paid_amount_cents": sum(row["amount_cents"] for row in paid)}}
+    matched = [row for row in visible if row.get("id") == values["order_id"]]
+    if not matched:
+        return {"ok": True, "data": {"found": False, "order": None}}
+    return {"ok": True, "data": {"found": True, "order": _order_view(matched[0])}}
+```
+
+**步骤6–7，只接受两种决策形状。** `tool_call` 必须恰好有 type、call_id、name、arguments；`final` 必须恰好有 type、content。字符串 `"false"` 不能当 bool；空 call_id、空 content、未知工具、arguments 为列表都拒绝。解析阶段不执行任何业务。
+
+```python
+def parse_decision(raw):
+    if not isinstance(raw, dict):
+        raise ValueError("decision must be an object")
+    kind = raw.get("type")
+    if kind == "tool_call":
+        if set(raw) != {"type", "call_id", "name", "arguments"}:
+            raise ValueError("unexpected tool_call fields")
+        call_id = _text(raw["call_id"], "call_id")
+        name = _text(raw["name"], "name")
+        if name not in TOOLS:
+            raise ValueError("unknown tool")
+        if not isinstance(raw["arguments"], dict):
+            raise ValueError("arguments must be an object")
+        return {"type": "tool_call", "call_id": call_id, "name": name,
+                "arguments": deepcopy(raw["arguments"])}
+    if kind == "final":
+        if set(raw) != {"type", "content"}:
+            raise ValueError("unexpected final fields")
+        return {"type": "final", "content": _text(raw["content"], "content")}
+    raise ValueError("unknown decision type")
+```
+
+**步骤8–9，把观察放回下一轮。** 每轮先把决策复制给模型可见的消息，再执行并把同一 call_id 的结果追加为 tool 消息。`trace` 保存 step、call_id、名称、参数和结果；`steps` 是模型调用次数，`tool_calls` 是实际执行次数，两者不能混用。
+
+```python
+def run(question, *, model, tenant_id, repo, max_steps=4):
+    question = _text(question, "question")
+    tenant_id = _text(tenant_id, "tenant_id")
+    if type(max_steps) is not int or not 1 <= max_steps <= 10:
+        raise ValueError("max_steps must be an integer in 1..10")
+    messages = [
+        {"role": "system", "content": "Use read-only tools when needed. "
+                                      "Answer with one final JSON object."},
+        {"role": "user", "content": question},
+    ]
+    trace, seen = [], set()
+    for step in range(1, max_steps + 1):
+        decision = parse_decision(model(deepcopy(messages)))
+        if decision["type"] == "final":
+            return {"answer": decision["content"], "steps": step,
+                    "tool_calls": len(trace), "trace": trace}
+        call_id = decision["call_id"]
+        if call_id in seen:
+            raise ValueError("duplicate call_id")
+        seen.add(call_id)
+        result = execute_tool(decision["name"], decision["arguments"],
+                              tenant_id=tenant_id, repo=repo)
+        messages.append({"role": "assistant", "content": deepcopy(decision)})
+        messages.append({"role": "tool", "call_id": call_id, "name": decision["name"],
+                         "content": deepcopy(result)})
+        trace.append({"step": step, "call_id": call_id, "name": decision["name"],
+                      "arguments": deepcopy(decision["arguments"]), "result": deepcopy(result)})
+    raise RuntimeError("step budget exhausted")
+```
+
+**步骤10–12，让失败也可验收。** 模型永远不 final 时按 `max_steps` 停止；同一 call_id 重复出现时拒绝；坏决策在执行前失败，仓储调用为 0；空 final 拒绝。下面用一个内存仓储和脚本模型走通两步：
+
+```python
+class DemoRepo:
+    def all(self):
+        return [{"id": "A1", "tenant_id": "a", "user": "Alice",
+                 "amount_cents": 79800, "status": "paid"}]
+
+def demo_model(messages):
+    if messages[-1]["role"] == "tool":
+        return {"type": "final", "content": "Alice 已支付 798 元"}
+    return {"type": "tool_call", "call_id": "C1", "name": "get_paid_total",
+            "arguments": {"user": "Alice"}}
+
+outcome = run("Alice 付了多少", model=demo_model, tenant_id="a", repo=DemoRepo())
+assert outcome["answer"] == "Alice 已支付 798 元"
+assert outcome["steps"] == 2 and outcome["tool_calls"] == 1
+assert outcome["trace"][0]["call_id"] == "C1"
+```
+
+这 12 步只覆盖执行边界：它不证明模型选对工具、不证明真实供应商协议、不包含审批与跨进程恢复。接真实模型时在外层适配器完成消息格式转换；审批绑定与重复恢复接[审批契约](../../tests/learner/练习说明.md#审批与幂等契约)，第26章再把两者组合。
 
 ## 5. 动手练习
+
+### 本章累计任务：看见真正工具执行
+
+按 4.2 的 12 步写自己的 `learner_agent.py`，用 `--through-step` 逐步通过契约；再保存一轮 assistant 调用、校验、执行、tool 结果与最终回答。分别注入未知工具、额外租户参数和未调用工具却宣称完成，核对执行次数。
+
+**未通过时怎样定位：** 工具描述不能授予权限；不完整流式参数不能提前执行；猜对结果不表示有本次工具证据。
+
+**带到下一步：** 第25章使这个流程能够暂停并跨进程续接。
+
+下方专题练习用于补当前卡点；先完成这一项累计任务，不另将所有索引作为必须并行完成的进度。
 
 ### 练习一：确定性工具执行器
 
@@ -198,7 +393,7 @@ else:
 
 ### 用真实模型完成同一轮工具调用
 
-设置 `$chatModel` 为本机已安装且支持原生工具调用的 Ollama 模型标签，运行 `uv run python -m practice.enterprise_ai.policy_agent --model $chatModel`。省略模型参数会走同一执行与评分路径的替身。比较输出中的模型标识、两轮用量、实际来源和退出原因。参考实现限定一个只读工具、至多一次执行、两次模型请求，每次请求限制生成长度。函数参数以空对象为契约，可信身份来自服务端。HTTP 等待超时和整项任务截止时间是不同约束；扩成长期服务时按第 11、14 章继续传递剩余预算。
+先设置 `$env:LAB_MODEL` 为本机已安装且支持原生工具调用的 Ollama 模型标签，再运行 `uv run --frozen python -m practice.enterprise_ai.policy_agent --model $env:LAB_MODEL`。变量未设置或为空时，命令会明确报错，不会静默回退替身；显式省略 `--model` 才走同一执行与评分路径的替身。比较输出中的模型标识、两轮用量、实际来源和退出原因。参考实现限定一个只读工具、至多一次执行、两次模型请求，每次请求限制生成长度。函数参数以空对象为契约，可信身份来自服务端。HTTP 等待超时和整项任务截止时间是不同约束；扩成长期服务时按第 11、14 章继续传递剩余预算。
 
 从一次失败开始：让替身先返回带额外租户参数的调用，预测工具执行次数；再让它跳过工具，直接给 20% 和一个来源号。前者在执行前失败，后者即使数字猜对，也没有本次工具观察支持。合上实现，独立增加一个只读的“查询项目预算”工具：只接收 project_id、按服务端身份过滤、返回整数分；用 P200、P900 和不存在的项目分别验收。第26章将重复这一套试验比较提示版本。[原生工具调用参考实现](../../practice/enterprise_ai/policy_agent.py)
 
@@ -211,8 +406,6 @@ else:
 **行为验收：** 真实执行且回传结果；不能只返回预设答案；停止条件有效；缺资料不推断合规。
 
 **原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
-
-**提交证据：** 实现位置、运行命令、正常案例、至少一个错误/边界案例、一次失败原因和修复记录。自动检查只证明其覆盖行为；未实现任务不因示例通过而算完成。
 
 ### 6.1 先预测，再查看参考推导
 
@@ -228,8 +421,6 @@ else:
 ## 7. 面试问答与迁移
 
 工具描述属于授权吗？如何证明 Agent 真正调用了工具？为什么多步任务不能只看最终文本？
-
-回答顺序：定义与边界 → 机制 → 小例子 → 项目影响 → 验证方式。不确定的实现细节明确说明版本和查证办法。
 
 ## 8. 本章小结与参考
 

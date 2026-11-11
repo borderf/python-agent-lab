@@ -29,7 +29,7 @@ function bookSidebar(directory, groups) {
         .filter(name => Number(name.slice(0, 2)) >= first && Number(name.slice(0, 2)) <= last)
         .sort().map(page)
     })),
-    { text: '附录与实操', collapsed: true, items: files.filter(name => name.startsWith('附录')).sort().map(page) }
+    { text: '按需查阅', collapsed: true, items: files.filter(name => name.startsWith('附录') && !name.startsWith('附录G-教材核验')).sort().map(page) }
   ]
 }
 
@@ -53,7 +53,7 @@ export default defineConfig({
     sidebar: {
       '/docs/python-book/': bookSidebar('docs/python-book', [
         ['Python 语言与原理', 1, 12], ['工程与后端服务', 13, 17],
-        ['大模型、RAG 与 Agent', 18, 23], ['协议与质量', 24, 26], ['项目与求职', 27, 30]
+        ['模型、检索、评测与DocPilot', 18, 23], ['受控Agent与恢复', 24, 26], ['可选扩展与求职', 27, 30]
       ]),
       '/docs/architecture-book/': bookSidebar('docs/architecture-book', [
         ['约束与结构', 1, 4], ['数据与协作', 5, 7], ['性能与可靠性', 8, 10], ['演进与实战', 11, 14]

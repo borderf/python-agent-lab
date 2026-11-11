@@ -222,3 +222,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local test artifacts (never commit)
+pytest-*/
+pytest-of-*/
+pytest-cache-files-*/
+.learner-tmp*/
+practice/architecture_labs/.architecture-lesson-*/
+practice/architecture_labs/.probe-dir/
+practice/architecture_labs/m[0-9][0-9][0-9]/
+practice/architecture_labs/plain-subdir/
+practice/architecture_labs/tmp*/

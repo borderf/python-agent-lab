@@ -49,7 +49,7 @@ WHERE id = 'T' AND status = 'pending' AND version = 7;
 同一脚本的第二部分用两个独立 SQLite 文件模拟客户端和业务服务。在仓库根目录运行：
 
 ```powershell
-uv run python -m practice.architecture_labs.idempotency_sqlite
+uv run --frozen python -m practice.architecture_labs.idempotency_sqlite
 ```
 
 运行前把纸分成“本地待办、远端效果、调用者看到什么”三列。沿下表预测，再对照程序输出和两个数据库中的行。动作键由客户端在发送前持久化。远端在自己的事务中保存动作键与效果；两个库各自提交。
