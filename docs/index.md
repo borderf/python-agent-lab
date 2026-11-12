@@ -16,6 +16,10 @@ features:
     details: 从对象与函数，到服务、检索、工具调用和两份完整项目。
     link: /docs/python-book/教材目录
     linkText: 阅读教材
+  - title: TypeScript 与 AI 交付
+    details: 把后端契约变成前端类型，处理异步、取消与流式回答，交付 AI 应用界面。
+    link: /docs/typescript-book/教材目录
+    linkText: 阅读教材
   - title: 软件架构
     details: 围绕同一组项目验证边界、数据一致性、容量和故障恢复。
     link: /docs/architecture-book/教材目录

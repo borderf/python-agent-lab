@@ -1,0 +1,6 @@
+kind,item,amount_yuan,period
+revenue,one_team_subscription,2000,monthly
+variable,model_usage,400,monthly
+variable,infrastructure_allocation,200,monthly
+variable,support_labor,500,monthly
+onboarding,initial_import_and_training,600,once

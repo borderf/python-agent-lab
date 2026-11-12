@@ -10,7 +10,7 @@ import pytest
 
 def pytest_addoption(parser):
     parser.addoption("--learner-module", default=None, help="Dotted path of YOUR implementation")
-    parser.addoption("--through-step", type=int, default=20, help="DocPilot steps to collect (1..20)")
+    parser.addoption("--through-step", type=int, default=20, help="Cumulative steps to collect (1..20)")
 
 
 def pytest_collection_modifyitems(config, items):

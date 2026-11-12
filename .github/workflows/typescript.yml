@@ -1,0 +1,26 @@
+name: Verify TypeScript learning examples
+on:
+  push:
+    branches: [main]
+    paths: ['typescript-examples/**', 'docs/typescript-book/**', '.github/workflows/typescript.yml']
+  pull_request:
+    paths: ['typescript-examples/**', 'docs/typescript-book/**', '.github/workflows/typescript.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  examples:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript-examples
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --global pnpm@10.11.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm start

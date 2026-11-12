@@ -6,6 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'practice/**/*.md'
+      - 'typescript-examples/src/**'
       - 'README.md'
       - '.vitepress/**'
       - 'package.json'

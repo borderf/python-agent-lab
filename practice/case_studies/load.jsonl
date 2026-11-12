@@ -1,0 +1,12 @@
+{"scenario":"baseline","request":"q1","outcome":"success","elapsed_ms":110}
+{"scenario":"baseline","request":"q2","outcome":"success","elapsed_ms":120}
+{"scenario":"baseline","request":"q3","outcome":"success","elapsed_ms":115}
+{"scenario":"baseline","request":"q4","outcome":"success","elapsed_ms":130}
+{"scenario":"mixed","request":"q1","outcome":"success","elapsed_ms":115}
+{"scenario":"mixed","request":"q2","outcome":"success","elapsed_ms":1400}
+{"scenario":"mixed","request":"q3","outcome":"timeout","elapsed_ms":2000}
+{"scenario":"mixed","request":"q4","outcome":"rejected","elapsed_ms":5}
+{"scenario":"limited","request":"q1","outcome":"success","elapsed_ms":160}
+{"scenario":"limited","request":"q2","outcome":"success","elapsed_ms":200}
+{"scenario":"limited","request":"q3","outcome":"success","elapsed_ms":190}
+{"scenario":"limited","request":"q4","outcome":"success","elapsed_ms":210}

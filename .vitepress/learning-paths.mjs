@@ -20,5 +20,6 @@ export const learningPaths = [
   { id: 'application', label: 'AI 应用交付', steps: [...application, 29, 30].map(number => chapters[number]) },
   { id: 'agent', label: 'Agent 开发', steps: [...application, 24, 25, 26, 29, 30].map(number => chapters[number]) },
   { id: 'architecture', label: '软件架构', steps: bookSteps('architecture-book') },
-  { id: 'product', label: '产品与创业', steps: bookSteps('product-founder-book') }
+  { id: 'product', label: '产品与创业', steps: bookSteps('product-founder-book') },
+  { id: 'typescript', label: 'TypeScript 交付', steps: bookSteps('typescript-book') }
 ]

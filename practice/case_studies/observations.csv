@@ -1,0 +1,7 @@
+user,method,order,task,correct,source_opened,help_count,elapsed_seconds,note
+U1,legacy,1,A,1,1,0,180,从收藏夹找到当日版本
+U1,prototype,2,B,0,0,0,60,复制当前比例后提前结束
+U2,prototype,1,A,1,1,1,90,主持人提示更换来源
+U2,legacy,2,B,0,0,2,300,到时仍未找到旧版本
+U3,legacy,1,A,1,1,0,40,熟悉这条制度
+U3,prototype,2,B,1,1,0,45,熟悉这条制度

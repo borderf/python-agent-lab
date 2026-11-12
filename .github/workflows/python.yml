@@ -3,9 +3,9 @@ name: Verify learning code
 on:
   push:
     branches: [main]
-    paths: ['src/**', 'practice/**', 'tests/**', 'scripts/**', 'docs/**', 'README.md', 'pyproject.toml', 'uv.lock', '.github/workflows/python.yml']
+    paths: ['src/**', 'practice/**', 'tests/**', 'scripts/**', 'docs/**', 'typescript-examples/tests/fixtures/**', 'README.md', 'pyproject.toml', 'uv.lock', '.github/workflows/python.yml']
   pull_request:
-    paths: ['src/**', 'practice/**', 'tests/**', 'scripts/**', 'docs/**', 'README.md', 'pyproject.toml', 'uv.lock', '.github/workflows/python.yml']
+    paths: ['src/**', 'practice/**', 'tests/**', 'scripts/**', 'docs/**', 'typescript-examples/tests/fixtures/**', 'README.md', 'pyproject.toml', 'uv.lock', '.github/workflows/python.yml']
   workflow_dispatch:
 
 permissions:
@@ -28,3 +28,6 @@ jobs:
       - run: uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module practice.learning_projects.docpilot_reference -q
       - run: uv run --frozen python -m pytest tests/learner/contract_agent.py --learner-module practice.learning_projects.agent_reference -q
       - run: uv run --frozen python -m pytest tests/learner/contract_approval.py --learner-module practice.learning_projects.approval_reference -q
+      - run: uv run --frozen python -m pytest tests/learner/contract_persistence.py --learner-module practice.learning_projects.persistence_reference -q
+      - run: uv run --frozen python -m pytest tests/learner/contract_resume.py --learner-module practice.learning_projects.resume_reference -q
+      - run: uv run --frozen python practice/case_studies/check_materials.py
