@@ -72,6 +72,7 @@ export default defineConfig({
       ]),
       '/': [
         learningRoute,
+        { text: '核心知识依赖图', link: '/docs/核心知识依赖图' },
         { text: '从实验到项目交付', link: '/docs/project-practice/从实验到项目交付' },
         { text: '阶段自测与复习', link: '/docs/python-book/附录H-阶段自测与复习' },
         { text: 'Python 与 AI', link: '/docs/python-book/教材目录' },
@@ -80,6 +81,8 @@ export default defineConfig({
         { text: '软件架构', link: '/docs/architecture-book/教材目录' },
         { text: '产品与创业', link: '/docs/product-founder-book/教材目录' },
         { text: '项目规格', link: '/docs/project-practice/项目实践规格' },
+        { text: '最小全栈切片', link: '/docs/project-practice/最小全栈切片' },
+        { text: '阶段整合任务', link: '/docs/project-practice/阶段整合任务' },
         { text: '评测与故障演练', link: '/docs/project-practice/评测与故障演练' },
         { text: '配套练习', link: '/practice/python_ai_course/练习说明' },
         { text: '网站构建与发布', link: '/docs/文档网站使用说明' }

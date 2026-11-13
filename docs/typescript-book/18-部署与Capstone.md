@@ -62,6 +62,8 @@ pnpm exec playwright test tests/search.spec.ts
 
 Playwright 先 `page.route("**/api/search", ...)` 固定一条结果，再断言搜索框、结果列表和来源链接可操作；随后用真实 BFF + Python 服务跑一次冒烟。完成这条路径后，再按第10、14章逐步加流式回答、工具轨迹和审批，不要反过来同时补所有组件。
 
+请求/响应契约、失败码、身份边界和 5 条浏览器验收见[最小全栈切片](../project-practice/最小全栈切片.md)；那里是待实现规格，不是已交付代码。
+
 ### 2.3 多阶段 Dockerfile
 
 ```dockerfile
