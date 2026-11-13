@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DocPilot 最小搜索</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
+    form { display: grid; gap: .75rem; margin-bottom: 1.5rem; }
+    label { font-weight: 600; }
+    input { padding: .5rem; font: inherit; }
+    button { padding: .5rem .9rem; font: inherit; cursor: pointer; }
+    [role="alert"] { color: #a40000; }
+    [role="status"] { color: #555; }
+    article { border: 1px solid #ccc; padding: 1rem; margin: 1rem 0; border-radius: .4rem; }
+    blockquote { margin: .5rem 0; padding-left: .8rem; border-left: 3px solid #aaa; }
+    li { margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DocPilot 搜索</h1>
+    <p>开发演示：固定教学身份 tenant=a；不是生产登录。</p>
+    <div id="root"></div>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

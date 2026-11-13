@@ -1,7 +1,7 @@
 export class RequestCancelled extends Error {
   constructor() { super("客户端已取消"); this.name = "AbortError"; }
 }
-type FailureStatus = 401 | 403 | 404 | 422 | 429 | 502 | 504;
+type FailureStatus = 401 | 403 | 404 | 422 | 429 | 502 | 503 | 504;
 export class UpstreamFailure extends Error {
   constructor(readonly status: FailureStatus, readonly code: string, message: string) { super(message); }
 }

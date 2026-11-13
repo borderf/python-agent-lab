@@ -8,19 +8,20 @@
 
 **本章从这里开始：** 本地 `pnpm dev` 正常，CI 构建失败；数据库迁移先删列，旧实例还在写；发布后健康检查通过，但用户搜索全 500。部署不是“传上去”，是**构建、迁移、启动、验证、回滚**一整套可重复流程。
 
-**当前起点：** 配套工程是类型检查与回归实验，尚无Vite宿主页、Node监听入口、迁移脚本或Dockerfile。本章给出交付设计与模板，需要你补齐入口并实际构建验证；它不是当前工程直接可执行的部署recipe。先完成第16章宿主与浏览器主路径，再扩真实会话、流式后端与写审批；不要用pnpm start的离线脚本代替服务启动。
+**当前起点：** 配套工程已有 esbuild 构建的 React 宿主页、Node 监听入口和流式协议演示；迁移脚本、生产会话、完整来源页与 Docker 交付仍未补齐。本章先复用现有入口，再给出生产构建与发布模板。模板中的 dist/client、dist/server 布局不同于当前 dist/ 与 host/，需要完成相应改造后才能构建镜像。不要用 pnpm start 的离线脚本代替 pnpm serve。
 
 ## 2. 基础知识讲解
 
 ### 2.1 构建产物与运行环境
 
-当前配套工程可执行下列命令，但它的build只编译实验模块，不产生完整前后端应用：
+先按[配套工程说明](../../typescript-examples/README.md)准备根目录与子工程依赖，再在 typescript-examples 中执行：
 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm serve
 ```
 
 独立完成部署工程时，`vite build`只产出浏览器资源；BFF/服务端代码还需构建。下列是**待实现的配置设计**，相应依赖、入口与配置要一起建立并锁定，不直接覆盖配套工程现有脚本：
@@ -37,32 +38,33 @@ pnpm build
 
 `tsconfig.server.json` 设置 `outDir: "dist/server"`、`rootDir: "src/server"`、`module: "NodeNext"`；Vite 的 `outDir` 设为 `dist/client`。不要让 Docker 去猜 `.output` 或 `dist/server.js`，构建脚本和镜像路径必须一致。
 
-### 2.2 先补一条最小宿主，而不是同时补所有组件
+### 2.2 沿已有宿主完成浏览器主路径
 
-最小可访问路径只需要四步：浏览器搜索 → BFF 转发 → Python DocPilot 返回结果 → 打开来源。先建下面三个文件，不要一开始加流式、会话和审批：
+先阅读并修改已有文件，走通浏览器搜索 → BFF → Python → 结果与来源摘要，不另建平行的 apps/web 工程：
 
 ```text
-apps/web/index.html
-apps/web/src/main.ts       表单、fetch /api/search、渲染列表与来源链接
-apps/server/server.ts      Hono BFF：/api/search 转发到 DOCPILOT_URL
+typescript-examples/host/index.html
+typescript-examples/src/host-client.tsx  挂载搜索与来源摘要
+typescript-examples/src/server.ts       HTTP入口与逐块响应转发
+typescript-examples/src/bff.ts          身份、校验、协议适配
 ```
 
-`main.ts` 的核心约束：
+继续改造时保留这些约束：
 
 - 用 `textContent` 渲染用户/模型文本，不把返回内容拼进 `innerHTML`；
-- 每个结果链接到 `/sources/:sourceId`，保留 source/version 参数；
+- 当前来源面板是命中引文预览；完整原文入口需经 BFF 请求 Python，重新授权并核对 source/version；
 - 请求失败显示错误与重试，不显示空列表冒充“没有结果”。
 
-宿主验收命令：
+当前可运行命令（执行目录为 typescript-examples，Python 启动步骤见切片手册）：
 
 ```powershell
-pnpm dev
-pnpm exec playwright test tests/search.spec.ts
+pnpm build
+pnpm serve
 ```
 
-Playwright 先 `page.route("**/api/search", ...)` 固定一条结果，再断言搜索框、结果列表和来源链接可操作；随后用真实 BFF + Python 服务跑一次冒烟。完成这条路径后，再按第10、14章逐步加流式回答、工具轨迹和审批，不要反过来同时补所有组件。
+Playwright 尚未安装；自行接入后先用 page.route 固定结果验证交互，再增加真实 BFF + Python 冒烟。来源全文、正式会话与写审批分别扩展；已有 `/api/answer` 是独立模型协议演示，不能代替有证据的 RAG 回答。
 
-请求/响应契约、失败码、身份边界和 5 条浏览器验收见[最小全栈切片](../project-practice/最小全栈切片.md)；那里是待实现规格，不是已交付代码。
+当前实现、协议和浏览器待验项统一见[最小全栈切片](../project-practice/最小全栈切片.md)。本地 HTTP 测试通过与浏览器交互验收分别记录。
 
 ### 2.3 多阶段 Dockerfile
 
@@ -272,7 +274,7 @@ health/liveness 表示进程活着，失败可重启；ready 表示能接流量�
 **三个关键词：** 不可变产物、兼容迁移、验收矩阵。不可变产物让各环境运行同一份代码，扩展/收缩迁移让数据库可回退，验收矩阵用证据而不是框架名证明完成。
 
 **最容易错：**
-- 用 `latest` 或可覆盖 tag 部署，在服务器上重新构建；或把只编译实验模块的 build 当成完整产物。
+- 用 `latest` 或可覆盖 tag 部署，在服务器上重新构建；或把当前 dist/host 教学产物误当成示例 Dockerfile 需要的 dist/client 与 dist/server。
 - 缺环境变量拖到运行时才 `undefined`，端口 `Number` 接受 NaN；密钥进镜像、日志或前端包。
 - 发布同一刻删旧列，或以为回滚代码能撤销已写数据；让 liveness 依赖上游，把 `/health` 当 `/ready`。
 - 用 `pnpm start` 的离线脚本代替服务启动，Capstone 只演示成功路径。

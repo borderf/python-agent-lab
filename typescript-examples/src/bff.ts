@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { RequestCancelled, UpstreamFailure, forwardSearch, parseSearchBody } from "./transport.js";
 import { parseSearchResponse } from "./search-contract.js";
+import { parseAnswerBody, providerEventToSse, streamOllama, type OllamaConfig } from "./stream-answer.js";
 
 type Actor = { tenantId: string; upstreamToken: string };
 type Env = { Variables: { requestId: string; actor: Actor } };
@@ -8,6 +9,7 @@ export function createBff(options: {
   upstreamUrl: string; mode: "core" | "persistent";
   authenticate: (token: string) => Promise<Actor | null>;
   fetcher?: typeof fetch; timeoutMs?: number;
+  ollama?: OllamaConfig;
 }) {
   const app = new Hono<Env>();
   app.use("*", async (c, next) => {
@@ -31,6 +33,39 @@ export function createBff(options: {
       c.req.raw.signal, options.fetcher, options.timeoutMs);
     try { return c.json(parseSearchResponse(result, options.mode)); }
     catch { throw new UpstreamFailure(502, "invalid_response", "上游字段与选定契约不一致"); }
+  });
+  app.post("/api/answer", async c => {
+    let raw: unknown;
+    try { raw = await c.req.json(); } catch { throw new UpstreamFailure(422, "invalid_json", "请求不是JSON"); }
+    const body = parseAnswerBody(raw);
+    const provider = options.ollama;
+    if (!provider) throw new UpstreamFailure(503, "model_unconfigured", "尚未配置独立的 Ollama 地址和模型");
+    const cancelled = new AbortController();
+    const signal = AbortSignal.any([c.req.raw.signal, cancelled.signal]);
+    const answerId = c.get("requestId");
+    let closed = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const write = (event: Parameters<typeof providerEventToSse>[0]) => {
+          if (!closed && !signal.aborted) controller.enqueue(encoder.encode(providerEventToSse(event, answerId)));
+        };
+        try {
+          await streamOllama(provider, body, signal, write, options.fetcher, options.timeoutMs);
+        } catch (error) {
+          if (error instanceof RequestCancelled) return;
+          const message = error instanceof UpstreamFailure ? error.message : "模型流暂不可用";
+          write({ type: "error", message, retryable: error instanceof UpstreamFailure && error.status !== 401 });
+        } finally {
+          if (!closed) { closed = true; controller.close(); }
+        }
+      },
+      cancel() { closed = true; cancelled.abort(); },
+    });
+    return new Response(stream, {
+      headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache",
+        Connection: "keep-alive" },
+    });
   });
   app.onError((error, c) => {
     // 499仅作本地分类；真实连接断开后通常无法再把响应送给客户端。

@@ -233,3 +233,5 @@ practice/architecture_labs/.probe-dir/
 practice/architecture_labs/m[0-9][0-9][0-9]/
 practice/architecture_labs/plain-subdir/
 practice/architecture_labs/tmp*/
+
+typescript-examples/host/app.js

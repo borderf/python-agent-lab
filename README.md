@@ -41,7 +41,18 @@ uv run --frozen python -m pytest practice/python_ai_course/checks_week01.py -q -
 | 实现两份 AI 作品 | [从实验到项目交付](docs/project-practice/从实验到项目交付.md) · [虚构数据与可运行实验](practice/enterprise_ai/虚构数据说明.md) · [接口、工具与审批规格](docs/project-practice/项目实践规格.md) |
 | 验收与复盘 | [项目里程碑](docs/python-book/附录E-项目里程碑与交付检查.md) · [评测与故障演练](docs/project-practice/评测与故障演练.md) · [学习记录模板](docs/python-book/附录D-学习记录模板.md) |
 
-接口与持久化参考切片从 `uv sync --frozen --group web --inexact` 开始；LangGraph、向量库、MCP 和 PostgreSQL 分别安装对应可选组，命令见项目装配手册。默认 `uv run --frozen pytest` 会跳过未安装组的集成实验。GitHub 的 Python 工作流安装 web、agent、vector、mcp 组，检查教材及这些离线集成；外部模型、PostgreSQL 服务与 Docker 另按实际环境验收。
+接口与持久化参考切片从 `uv sync --frozen --group web --inexact` 开始；LangGraph、向量库、MCP 和 PostgreSQL 分别安装对应可选组，命令见项目装配手册。默认 `uv run --frozen python -m pytest` 会跳过未安装组的集成实验。使用模块入口使仓库根目录在导入路径中；直接调用 pytest 命令可能找不到 practice。GitHub 的 Python 工作流安装 web、agent、vector、mcp 组，检查教材及这些离线集成；外部模型、PostgreSQL 服务与 Docker 另按实际环境验收。
+
+## 当前验证状态
+
+| 范围 | 已能证明 | 仍需环境/未验证 |
+| --- | --- | --- |
+| Python 教材 | 离线示例、契约与静态检查 | 真实模型、PostgreSQL、Docker、部署 |
+| TS 示例 | typecheck、单元/集成/React/server 测试、BFF→Python HTTP | Playwright 浏览器交互、真实供应商流 |
+| 最小全栈宿主 | React 页面、BFF、Python 搜索、来源面板 | 独立来源页、真实浏览器证据 |
+| 架构/产品 | 结构检查、案例与算例 | 真实负载、客户访谈、支付与经营结果 |
+
+“可运行配套”“需装配”“待实现目标”按上表区分；静态检查通过不等于外部环境已经打通。
 
 ## 常用命令
 
@@ -50,7 +61,7 @@ uv run --frozen python -m pytest practice/python_ai_course/checks_week01.py -q -
 uv run --frozen python -m python_agent_lab.basics.collections
 
 # 验证已实现的仓库代码；配套 TODO 用上面的显式路径检查
-uv run --frozen pytest
+uv run --frozen python -m pytest
 
 # 检查教材结构、本地链接和配套实验
 uv run --frozen python -X utf8 scripts/verify_learning_tracks.py

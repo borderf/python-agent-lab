@@ -1,6 +1,6 @@
 # 第06章　HTTP、SSE 与流式 AI 响应
 
-[上一章](05-异步并发与取消.md) · [全书目录](教材目录.md) · [下一章](教材目录.md)
+[上一章](05-异步并发与取消.md) · [全书目录](教材目录.md) · [下一章](07-模块构建与工程化.md)
 
 ## 1. 学习目标与前置知识
 
@@ -57,6 +57,72 @@ data: {"answerId":"A1","needsReview":true}
 事件名来自event行；data不再额外要求type。token携带text，citation携带包含sourceId、version、quote的citation，done必须有answerId和needsReview，error必须有message和布尔retryable。未知事件名允许跳过，已知事件的坏载荷拒绝。
 
 <<< ../../typescript-examples/src/stream-events.ts
+
+### 2.5 供应商流式不是应用事件
+
+浏览器最终消费的是本项目的应用协议：
+
+```text
+应用事件：token / citation / done / error
+```
+
+供应商协议可能完全不同：
+
+| 供应商形态 | 线格式 | 适配器要做什么 |
+| --- | --- | --- |
+| Ollama `/api/chat` | NDJSON，每行一个 JSON | 按行拆包、UTF-8 增量解码、映射 message.content/done |
+| OpenAI 兼容 | SSE，`data: {...}` + `[DONE]` | 解析 data 帧、识别结束哨兵、错误事件 |
+| 工具调用流 | 参数 JSON 分片 | 先累积完整参数，再校验/执行；不能收到半段就调用 |
+
+适配器要分开四层：**字节 → 行/帧 → 供应商事件 → 应用事件**。不要直接在 React 组件里解析供应商 JSON。
+
+必须处理：
+
+- 一个多字节汉字被拆到两次网络读取；用 `TextDecoder({stream:true})` 或增量解码器；
+- 结束状态：`done`、`[DONE]`、连接关闭分别代表什么；
+- 错误事件：可重试/不可重试；已输出部分不能简单重跑整次请求；
+- 工具参数分片：完整组装并通过 Schema 后才执行；
+- 用量：供应商不提供就留空，不用字符数编造精确 token；
+- 超时/取消：连接、读取、总预算、用户取消分开；停止后保留已有内容。
+
+**当前仓库已有 Ollama NDJSON 的离线适配器**（`provider-stream.ts` 与测试）：覆盖跨字节 UTF-8、done/用量、tool_calls 与错误行；**真实 Ollama 调用仍未验证**。应用 SSE 解析器（`sse.ts`/`stream-events.ts`）也已实现；第14章把 `tool/tool_result` 标为扩展目标。真实供应商联调前，不能把“离线夹具/应用 SSE 测试通过”当成“真实模型流式已打通”。
+
+真实联调记录至少保存：
+
+```text
+OLLAMA_MODEL：
+请求 URL / 方法：
+首 token 时间、总耗时：
+结束原因、usage：
+错误/断流/取消各一次结果：
+未验证项：
+```
+
+命令示例（不要写进默认 CI）：
+
+```powershell
+$env:OLLAMA_MODEL="你的本地模型"
+node --input-type=module -e "const r=await fetch('http://localhost:11434/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:process.env.OLLAMA_MODEL,messages:[{role:'user',content:'用一句话解释预付款'}],stream:true})}); console.log(r.status, r.headers.get('content-type')); console.log(await r.text())"
+```
+
+这条命令用 response.text() 收集整包，只检查本机 Ollama 的响应，不测逐段到达。接进 BFF 时按[切片手册](../project-practice/最小全栈切片.md#5-已实现的模型流式协议演示)分别设置 OLLAMA_URL、OLLAMA_MODEL；DOCPILOT_URL 继续指向 Python 搜索服务，凭据也分别管理。
+
+#### 先看一次正常流，再改变结束条件
+
+一次流式回答依次经过三道门：
+
+```text
+Ollama 写 NDJSON 行
+→ streamOllama 解析供应商事件，正常 stop 才算完整
+→ BFF 编码 SSE，Node HTTP 入口逐块发送
+→ 浏览器解析 token，控制器批量更新 React 状态
+```
+
+三个“流”要分别检查。供应商逐段返回，不代表 Node 入口也逐段发送：若入口调用 response.arrayBuffer()，它会等完整回答结束。现在 server.ts 将响应体按流转发，并在下游断开时通知请求取消。HTTP测试先让假供应商只发第一段，等待客户端确实收到，再允许供应商结束；这比检查最终文本中有 token/done 更能证明没有整包缓冲。
+
+接着逐一改条件：没有终止行就断开应为错误；done_reason 为 length 表示达到上限，应保留部分文本并提示未完成；正常 stop 才进入完成态。reader 在正常、异常和取消时都要清理。宿主页直接复用第10章的 useStreamingAnswer，避免重新写一套容易出现旧请求覆盖新请求的状态逻辑。
+
+当前 /api/answer 只是独立模型协议演示，问题没有经过 RAG，也没有已验证引用。工具事件只转发，客户端暂时忽略；参数分片组装和工具执行仍属于第14章扩展。
 
 ## 3. 原理讲解与推导
 

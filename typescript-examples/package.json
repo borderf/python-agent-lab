@@ -9,9 +9,11 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json",
+    "build:host": "node ../node_modules/esbuild/bin/esbuild src/host-client.tsx --bundle --format=esm --platform=browser --jsx=automatic --define:process.env.NODE_ENV='\"production\"' --outfile=host/app.js",
+    "build": "tsc -p tsconfig.build.json && node ../node_modules/esbuild/bin/esbuild src/host-client.tsx --bundle --format=esm --platform=browser --jsx=automatic --define:process.env.NODE_ENV='\"production\"' --outfile=host/app.js",
     "start": "node dist/main.js",
-    "test": "pnpm build && node --test --test-concurrency=1 tests/*.test.mjs"
+    "serve": "node dist/server.js",
+    "test": "pnpm build && node tests/core.test.mjs && node tests/integration.test.mjs && node tests/react.test.mjs && node tests/server.test.mjs && node tests/provider-stream.test.mjs && node tests/answer-stream.test.mjs && node tests/real-http-stream.test.mjs"
   },
   "devDependencies": {
     "@types/jsdom": "21.1.7",
