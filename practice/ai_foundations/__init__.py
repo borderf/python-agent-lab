@@ -1,0 +1,1 @@
+"""AI foundations package for textbook checks."""

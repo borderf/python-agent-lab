@@ -1,5 +1,6 @@
 import type { Citation, StreamEvent } from "./stream-state.js";
 
+// 当前协议只实现 token/citation/done/error；tool/tool_result 是教材第14章的扩展目标。
 export function parseStreamEvent(eventName: string, data: string): StreamEvent | null {
   // 可扩展协议：忽略未知事件名，但已知事件的坏载荷必须拒绝。
   if (!["token", "citation", "done", "error"].includes(eventName)) return null;

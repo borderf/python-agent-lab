@@ -16,6 +16,10 @@ features:
     details: 从对象与函数，到服务、检索、工具调用和两份完整项目。
     link: /docs/python-book/教材目录
     linkText: 阅读教材
+  - title: AI 基础原理
+    details: 从 token、embedding、注意力到训练、推理、RAG 与评测，补齐面试和排障所需机制。
+    link: /docs/ai-foundations/教材目录
+    linkText: 阅读原理
   - title: TypeScript 与 AI 交付
     details: 把后端契约变成前端类型，处理异步、取消与流式回答，交付 AI 应用界面。
     link: /docs/typescript-book/教材目录

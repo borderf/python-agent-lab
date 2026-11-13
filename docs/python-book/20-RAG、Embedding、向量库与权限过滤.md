@@ -32,6 +32,8 @@
 
 块要保存doc_id、version、chunk_id、来源位置、有效区间和访问范围。太短会丢适用条件，太长会稀释匹配并占上下文；重叠改善边界也会产生重复。用固定问题与证据标注比较，而不是凭块长度给出万能参数。
 
+项目装配页的小数据教学版可能每次查询按租户重建索引，用来验证更新、删除和隔离；这是教学基线，不是持续使用的工程设计。生产系统应在导入/发布阶段构建，查询只读已发布代次；两种实现都必须保持相同的租户、日期和版本过滤，不能因为“每次重建”就跳过索引生命周期。
+
 ### 2.3 用Embedding建立向量表示
 
 Embedding模型把文本映射成固定维度向量，查询与文档需要采用相容的模型和处理约定。维度相同仍不证明来自同一向量空间；更换模型通常需要区分或重建索引。
@@ -90,32 +92,76 @@ assert [d["id"] for d in hits] == ["current"]
 # study-example: S20B
 rows = []
 active = {}
+
 def publish(doc_id, generation, texts, tenant):
+    key = (tenant, doc_id)
     draft = [{"doc_id":doc_id,"generation":generation,"chunk":i,"tenant":tenant,"text":text}
              for i,text in enumerate(texts)]
     if not draft or any(not row["text"].strip() for row in draft):
         raise ValueError("未完成有效索引，不发布")
+    existing = [row for row in rows
+                if row["tenant"] == tenant and row["doc_id"] == doc_id
+                and row["generation"] == generation]
+    if existing:
+        if [row["text"] for row in existing] != [row["text"] for row in draft]:
+            raise ValueError("同一代次不能提交不同内容")
+        return "unchanged"
     rows.extend(draft)
-    active[doc_id] = generation
+    active[key] = generation
+    return "published"
+
 def visible(tenant):
     return [row for row in rows if row["tenant"] == tenant
-            and active.get(row["doc_id"]) == row["generation"]]
+            and active.get((row["tenant"], row["doc_id"])) == row["generation"]]
 
 publish("policy", "g1", ["上限30%"], "a")
 publish("policy", "g2", ["上限20%"], "a")
 assert [row["text"] for row in visible("a")] == ["上限20%"]
 assert visible("b") == []
-active.pop("policy")
-assert visible("a") == [] and len(rows) == 2
+
+# 同代次同内容是幂等重试；同代次不同内容必须拒绝
+assert publish("policy", "g2", ["上限20%"], "a") == "unchanged"
+try:
+    publish("policy", "g2", ["上限25%"], "a")
+except ValueError:
+    pass
+else:
+    raise AssertionError("同代次不同内容应冲突")
+assert [row["text"] for row in visible("a")] == ["上限20%"]
+
+# 两个租户可以有同名 doc_id，发布/删除必须按 (tenant, doc_id) 作用域
+publish("same", "g1", ["A租户上限30%"], "a")
+publish("same", "g1", ["B租户上限50%"], "b")
+assert [row["text"] for row in visible("a")] == ["上限20%", "A租户上限30%"]
+assert [row["text"] for row in visible("b")] == ["B租户上限50%"]
+publish("same", "g2", ["B租户上限40%"], "b")
+assert [row["text"] for row in visible("a")] == ["上限20%", "A租户上限30%"]
+assert [row["text"] for row in visible("b")] == ["B租户上限40%"]
+
+active.pop(("a", "policy"))
+assert all("上限20%" != row["text"] for row in visible("a"))
+assert len(rows) == 5  # 旧块被逻辑隐藏，但物理行仍在
 ```
 
-这是单进程发布指针的概念模型，不是数据库并发事务。新一代准备完成后才切换可见代次；逻辑删除后即使物理旧块尚在，在线检索也必须不可见。真实系统还需持久存储、唯一性、失败回滚、并发发布与可信权限过滤；每个访问入口都必须遵守规则。
+这是单进程发布指针的概念模型，不是数据库并发事务。新一代准备完成后才切换可见代次；逻辑删除后即使物理旧块尚在，在线检索也必须不可见。真实系统还需持久存储、唯一性、失败回滚、并发发布与可信权限过滤；每个访问入口都必须遵守规则。**发布指针的作用域必须包含租户**，否则两个租户使用同名 `doc_id` 时，后发布者会覆盖前者的可见代次；删除也必须按 `(tenant, doc_id)` 执行。
 
 历史查询不是随意拿当前指针：它按业务日期选取有效来源版本，并再次授权。索引代次表示处理管道的一次产物，文档业务版本表示制度语义，二者不要混成一个字段。缓存还需包含相关知识代次与权限范围，删除或撤权后使受影响缓存失效。
 
 给每次索引保存文档哈希、解析器、切块规则、embedding模型/维度和构建状态。相同point ID的重试按实际存储契约处理，块数缩短时不要留下仍可见的尾块。更换embedding模型通常建立新索引或集合，完成回归后再切流，不把同维度当作向量兼容证明。
 
 完整验收包括：旧版→新版后当前答案引用新版；删除后候选、上下文与缓存都不含旧内容；失败构建不覆盖可用代次；撤权立即影响在线可见性。离线语料评测与更新流程评测是两类任务。
+
+把这条链路按同一份材料串起来：
+
+| 步骤 | 章节 | 正常证据 | 失败证据 |
+| --- | --- | --- | --- |
+| 上传并记录任务状态 | 16 | queued→running→completed | 非法状态跳转被拒绝 |
+| 解析并保存页面/定位 | 19 | page + quote + offset | 扫描页/空文本标记 needs_review |
+| 按租户和日期检索 | 20 | 当前版本进入候选 | 旧版/跨租户不可见 |
+| 模型不可用时降级 | 17 | search 200，answer 503/fallback | 不把 degraded 当完整回答 |
+| 修改/删除后重查 | 20 | 新代次可见，旧代次隐藏 | 旧块/缓存不再返回 |
+
+每一步保留一个正常案例和一个失败案例，才算把“上传→解析→检索→降级→更新”走通，而不是分别记住几个概念。
 
 ### 2.8 为什么相似的句子会被排到一起
 
@@ -154,6 +200,8 @@ assert contrastive_loss(0.8, 0.7) > contrastive_loss(0.8, -0.2)
 # book-example: B20
 from math import sqrt
 def cosine(left, right):
+    if len(left) != len(right):
+        raise ValueError("vector dimensions differ")
     denominator = sqrt(sum(x*x for x in left))*sqrt(sum(y*y for y in right))
     if not denominator:
         raise ValueError("zero vector")

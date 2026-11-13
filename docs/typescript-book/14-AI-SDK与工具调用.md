@@ -114,6 +114,17 @@ data: {"text":"订单 A 已支付。"}
 
 前端把 `tool-call` 渲染为轨迹，把 `tool_result` 更新状态；模型继续生成文本。审批工具返回 `waiting_approval`，UI 显示批准/拒绝按钮，批准后由服务端用稳定动作键执行，不经过模型重复决策。
 
+**当前配套实现只覆盖 token/citation/done/error。** `typescript-examples/src/stream-events.ts` 对 `tool`、`tool_result` 会返回 `null`（按未知事件跳过），所以上面的工具事件是**扩展目标**，不是已经接通的演示。要完成接线，至少改四处：
+
+| 位置 | 需要增加 |
+| --- | --- |
+| `stream-state.ts` 的 `StreamEvent` | `tool-call`（callId/name/arguments）与 `tool-result`（callId/ok/data/error）分支 |
+| `stream-events.ts` 的 `parseStreamEvent` | 把 `event: tool` 映射为 `tool-call`，`tool_result` 映射为结果；已知事件坏载荷必须抛错，未知事件才跳过 |
+| `stream-state.ts` 的 reducer/状态 | 增加 `tools` 轨迹（或独立 trace reducer），不要把工具结果混进正文文本 |
+| 测试 | 在 `typescript-examples/src/main.ts` 或后续 Vitest 中加：合法工具事件、重复 callId、坏参数、未知工具、工具失败后正文继续 |
+
+在完成这些修改前，正文里的 tool 事件只用于说明协议形状；不要把“解析器能跳过未知事件”误当成“界面已经支持工具轨迹”。
+
 ### 2.6 MCP：跨进程工具协议
 
 MCP（Model Context Protocol）解决“工具/资源在另一个进程或服务里，如何被发现和调用”。它适合：

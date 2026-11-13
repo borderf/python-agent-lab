@@ -76,10 +76,19 @@ recall = len(set(retrieved[:3]) & relevant) / len(relevant)
 precision = len(set(retrieved[:3]) & relevant) / 3
 first_rank = next((i for i, item in enumerate(retrieved, 1) if item in relevant), None)
 reciprocal_rank = 0 if first_rank is None else 1 / first_rank
+def mrr(pairs):
+    if not pairs:
+        raise ValueError("至少需要一道题")
+    return sum(
+        (0 if (first := next((i for i, item in enumerate(ranked, 1) if item in labels), None)) is None
+         else 1 / first)
+        for labels, ranked in pairs
+    ) / len(pairs)
 assert recall == 0.5 and precision == 1/3 and reciprocal_rank == 0.5
+assert mrr([({"A", "B"}, ["C", "A", "D"]), ({"E"}, ["E"])]) == 0.75
 ```
 
-Recall看需要的证据找回多少，Precision看返回项中相关多少，MRR聚合多个问题的首个相关位置倒数。无相关证据题不能随意把Recall分母设为0后忽略，应另测拒答行为。分级相关性可使用带位置折扣的nDCG，先定义标注与理想排序再计算。
+Recall看需要的证据找回多少，Precision看返回项中相关多少，单题第一个相关位置的倒数是RR；多题RR求平均才是MRR。无相关证据题不能随意把Recall分母设为0后忽略，应另测拒答行为。分级相关性可使用带位置折扣的nDCG，先定义标注与理想排序再计算。
 
 ### 2.5 用逐题误差分析指导改进
 

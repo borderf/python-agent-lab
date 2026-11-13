@@ -52,6 +52,19 @@ with httpx.Client(base_url="https://example.test", transport=httpx.MockTransport
 
 把响应分别改成500、非JSON文本和结构错误对象，观察失败分别在哪层。MockTransport不验证真实DNS、TLS、代理或服务可用性，这些要由对应集成检查补充。HTTP成功也不证明每条订单已满足领域规则。
 
+#### 最小输入—首个失败层对照
+
+| 输入 | 首个失败层 | 调用方应看到 |
+| --- | --- | --- |
+| 连接/读取超时 | 传输 | 可重试的 timeout，不进入 JSON 解析 |
+| 500 + HTML | HTTP 状态 | upstream_error，不能先报 JSON 错 |
+| 200 + 非 JSON 文本 | 解析 | parse_error，保留截断内容 |
+| 200 + JSON 对象而非列表 | 结构 | schema_error，说明期望 list |
+| 200 + 列表元素金额 `"10"` 或 `true` | 字段/业务 | validation_error，定位到字段 |
+| 200 + 合法列表 | — | 进入金额汇总 |
+
+逐项只改 handler 的一个变量，先写下预期失败层再运行；不要一次改三处，否则无法归因。最后把同一组输入交给适配器，要求它返回可区分的错误类别，而不是统一 `[]`。
+
 ### 2.3 让模型约束贴合外部契约
 
 用Pydantic BaseModel声明字段、范围、状态、缺失和额外字段规则。严格模式用于拒绝本不允许的隐式转换，转换模式用于有明确兼容需求的输入；不能依赖默认行为猜测金额字符串是否会通过。

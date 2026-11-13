@@ -37,7 +37,32 @@ pnpm build
 
 `tsconfig.server.json` 设置 `outDir: "dist/server"`、`rootDir: "src/server"`、`module: "NodeNext"`；Vite 的 `outDir` 设为 `dist/client`。不要让 Docker 去猜 `.output` 或 `dist/server.js`，构建脚本和镜像路径必须一致。
 
-### 2.2 多阶段 Dockerfile
+### 2.2 先补一条最小宿主，而不是同时补所有组件
+
+最小可访问路径只需要四步：浏览器搜索 → BFF 转发 → Python DocPilot 返回结果 → 打开来源。先建下面三个文件，不要一开始加流式、会话和审批：
+
+```text
+apps/web/index.html
+apps/web/src/main.ts       表单、fetch /api/search、渲染列表与来源链接
+apps/server/server.ts      Hono BFF：/api/search 转发到 DOCPILOT_URL
+```
+
+`main.ts` 的核心约束：
+
+- 用 `textContent` 渲染用户/模型文本，不把返回内容拼进 `innerHTML`；
+- 每个结果链接到 `/sources/:sourceId`，保留 source/version 参数；
+- 请求失败显示错误与重试，不显示空列表冒充“没有结果”。
+
+宿主验收命令：
+
+```powershell
+pnpm dev
+pnpm exec playwright test tests/search.spec.ts
+```
+
+Playwright 先 `page.route("**/api/search", ...)` 固定一条结果，再断言搜索框、结果列表和来源链接可操作；随后用真实 BFF + Python 服务跑一次冒烟。完成这条路径后，再按第10、14章逐步加流式回答、工具轨迹和审批，不要反过来同时补所有组件。
+
+### 2.3 多阶段 Dockerfile
 
 ```dockerfile
 FROM node:22-alpine AS build
@@ -60,7 +85,7 @@ CMD ["node", "dist/server/server.js"]
 
 真实项目要处理非 root 用户、只复制生产依赖、健康检查、时区/证书。镜像构建也应在 CI 完成并打 digest，部署用 digest 而不是 `latest`。
 
-### 2.3 配置与密钥
+### 2.4 配置与密钥
 
 ```ts
 function required(name: string): string {
@@ -79,7 +104,7 @@ export const config = {
 
 启动时失败优于运行时 `undefined`。端口还应检查为1–65535范围的整数，不能只用Number接受NaN或小数。密钥用平台secret/环境变量注入，不进镜像、不进仓库、不进日志。不同环境用不同配置，但构建产物尽量一致。
 
-### 2.4 健康检查
+### 2.5 健康检查
 
 ```ts
 app.get("/health", (c) => c.json({ ok: true }));
@@ -95,7 +120,7 @@ app.get("/ready", async (c) => {
 
 `/health` 表示进程活着；`/ready` 表示能接流量（数据库/上游/迁移完成）。liveness 不应依赖外部上游，否则上游抖动会重启所有实例。
 
-### 2.5 迁移与兼容发布
+### 2.6 迁移与兼容发布
 
 数据库迁移分“扩展/收缩”：
 
@@ -106,7 +131,7 @@ app.get("/ready", async (c) => {
 
 不要在发布同一刻执行破坏性迁移；回滚代码不会撤销已写数据。迁移脚本要版本化、可重复执行（幂等），并在预发环境跑过。
 
-### 2.6 发布策略与回滚
+### 2.7 发布策略与回滚
 
 - **滚动**：逐批替换，适合大多数；
 - **蓝绿**：两套环境切换，回滚快，成本高；

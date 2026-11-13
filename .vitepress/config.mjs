@@ -47,6 +47,7 @@ export default defineConfig({
     nav: [
       learningRoute,
       { text: 'Python 与 AI', link: '/docs/python-book/教材目录', activeMatch: '/docs/python-book/' },
+      { text: 'AI 基础', link: '/docs/ai-foundations/教材目录', activeMatch: '/docs/ai-foundations/' },
       { text: 'TypeScript', link: '/docs/typescript-book/教材目录', activeMatch: '/docs/typescript-book/' },
       { text: '软件架构', link: '/docs/architecture-book/教材目录', activeMatch: '/docs/architecture-book/' },
       { text: '产品与创业', link: '/docs/product-founder-book/教材目录', activeMatch: '/docs/product-founder-book/' }
@@ -63,6 +64,9 @@ export default defineConfig({
         ['类型与运行时', 1, 4], ['异步与流式交付', 5, 6], ['工程化与界面', 7, 10],
         ['BFF、数据与AI', 11, 14], ['测试、观测与交付', 15, 18]
       ]),
+      '/docs/ai-foundations/': bookSidebar('docs/ai-foundations', [
+        ['从 token 到 Transformer', 1, 4], ['训练、推理与系统', 5, 9]
+      ]),
       '/docs/product-founder-book/': bookSidebar('docs/product-founder-book', [
         ['问题与研究', 1, 3], ['设计与交付', 4, 6], ['衡量与迭代', 7, 9], ['商业化与创业', 10, 14]
       ]),
@@ -71,6 +75,7 @@ export default defineConfig({
         { text: '从实验到项目交付', link: '/docs/project-practice/从实验到项目交付' },
         { text: '阶段自测与复习', link: '/docs/python-book/附录H-阶段自测与复习' },
         { text: 'Python 与 AI', link: '/docs/python-book/教材目录' },
+        { text: 'AI 基础原理', link: '/docs/ai-foundations/教材目录' },
         { text: 'TypeScript 与 AI 交付', link: '/docs/typescript-book/教材目录' },
         { text: '软件架构', link: '/docs/architecture-book/教材目录' },
         { text: '产品与创业', link: '/docs/product-founder-book/教材目录' },

@@ -36,7 +36,7 @@ uv run --frozen python -m pytest practice/python_ai_course/checks_week01.py -q -
 
 | 当前任务 | 入口 |
 | --- | --- |
-| 找章节、决定下一步 | [学习导航](docs/学习导航.md) · [Python 与 AI](docs/python-book/教材目录.md) · [TypeScript 与 AI 交付](docs/typescript-book/教材目录.md) · [软件架构](docs/architecture-book/教材目录.md) · [产品与创业](docs/product-founder-book/教材目录.md) |
+| 找章节、决定下一步 | [学习导航](docs/学习导航.md) · [Python 与 AI](docs/python-book/教材目录.md) · [AI 基础原理](docs/ai-foundations/教材目录.md) · [TypeScript 与 AI 交付](docs/typescript-book/教材目录.md) · [软件架构](docs/architecture-book/教材目录.md) · [产品与创业](docs/product-founder-book/教材目录.md) |
 | 练语言、找代码位置 | [语言检查表](docs/python-book/附录C-Python能力检查表.md) · [章节实验区](practice/chapter_labs/练习说明.md) · [配套练习及检查文件](practice/python_ai_course/练习说明.md) |
 | 实现两份 AI 作品 | [从实验到项目交付](docs/project-practice/从实验到项目交付.md) · [虚构数据与可运行实验](practice/enterprise_ai/虚构数据说明.md) · [接口、工具与审批规格](docs/project-practice/项目实践规格.md) |
 | 验收与复盘 | [项目里程碑](docs/python-book/附录E-项目里程碑与交付检查.md) · [评测与故障演练](docs/project-practice/评测与故障演练.md) · [学习记录模板](docs/python-book/附录D-学习记录模板.md) |

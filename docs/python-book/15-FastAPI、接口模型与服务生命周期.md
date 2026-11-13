@@ -103,8 +103,10 @@ class Amount(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     cents: int = Field(ge=0)
 app = FastAPI()
+calls = []
 @app.post("/amounts")
 def inspect_amount(body: Amount):
+    calls.append(body.cents)
     return {"cents": body.cents}
 ```
 
@@ -117,6 +119,32 @@ def inspect_amount(body: Amount):
 输入模型不能回答当前身份能否操作这笔金额。两个请求即使正文相同，主体不同也可能获得不同授权结果；因此认证与对象权限位于可信服务端边界。
 
 测试时分别让金额非法、身份未知和资源越权，检查失败发生在哪层以及业务函数是否执行。只测一个正常200，无法证明这些路径。
+
+```python
+# framework-example: F15B
+from fastapi.testclient import TestClient
+
+with TestClient(app) as client:
+    calls.clear()
+    ok = client.post("/amounts", json={"cents": 1})
+    assert ok.status_code == 200
+    assert ok.json() == {"cents": 1}
+    assert calls == [1]
+
+    calls.clear()
+    for bad in (
+        {"cents": "1"},
+        {"cents": True},
+        {"cents": -1},
+        {"cents": 1, "tenant_id": "b"},
+    ):
+        assert client.post("/amounts", json=bad).status_code == 422
+    assert calls == []  # 验证失败时业务函数没有执行
+```
+
+这里复用上面的 `app`；`with TestClient(app)`会经过真实路由、Pydantic验证和响应映射，并在进入/退出时触发应用 lifespan，因此可以测试中间件与生命周期（需要先真正配置它们），不是直接调用路由函数。它仍不验证真实网络、代理和部署环境，后者需要启动服务或集成环境。
+
+注意：TestClient 能测试的是“进程内配置的中间件/依赖/lifespan”，不是“生产环境的网络与部署”；这两类证据不能互相替代。
 
 ## 5. 动手练习
 
