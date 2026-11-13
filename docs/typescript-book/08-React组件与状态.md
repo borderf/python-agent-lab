@@ -195,10 +195,35 @@ React 用引用比较判断是否变化；原地修改不会产生新引用，�
 
 ## 8. 本章小结与参考
 
-- 组件是 props → UI 的纯函数；副作用放事件或 effect。
-- state 用替换而非原地修改；复杂状态用 reducer/判别联合。
-- 状态放在最近共同祖先；能计算的值不另存。
-- effect 只同步外部系统，必须清理；请求要可中止。
+### 8.1 一页知识地图
+
+**本章主问题：** 一次搜索提交后，这一帧看到的是哪份 state，晚到的旧请求结果还能不能写回界面？
+
+**一条主线：**
+
+```text
+props/state → 渲染快照 → 事件更新（替换而非原地改）→ effect 启停与 cleanup → 运行归属检查 → 新界面
+```
+
+**三个关键词：** 快照、归属、清理。渲染是状态的快照，运行归属决定哪个请求能提交结果，cleanup 让旧运行失效并取消请求。
+
+**最容易错：**
+
+- 直接改 `filters.status`，或用数组下标当 key，React 看不到变化、列表状态错位。
+- 在渲染里发请求、写 `localStorage`：组件应是 props 到 UI 的纯函数，副作用放事件处理器或 effect。
+- 只检查 `loading` 就相信结果，A 的迟到回调覆盖 B；只 cancel 不做归属检查同样不行。
+- 漏 effect 依赖或没有 cleanup，Strict Mode 双执行时才暴露重复请求和定时器泄漏。
+
+**与前后章：** 上一章的包边界让组件和 hooks 能按模块导入；下一章需要把请求、缓存、失效和错误隔离从组件里抽成查询 hook。
+
+**学完应能：**
+
+- 把搜索页拆成表单、结果列表和引用卡片，用判别联合或 reducer 表达空、加载、错误、成功四态，状态放在最近共同祖先、能算出的值不另存；
+- 用 `LatestQuery` 的运行标识加 `AbortController`，让旧请求无法覆盖新身份；
+- 解释 state 快照、重渲染和重新挂载的差别，并复现一次输入框失焦；
+- 给列表用来源、版本、引文组成的稳定 key，让错误能被读屏识别。
+
+### 8.2 参考与后续学习
 
 参考：[React: Describing the UI](https://react.dev/learn/describing-the-ui)、[Managing State](https://react.dev/learn/managing-state)、[Synchronizing with Effects](https://react.dev/learn/synchronizing-with-effects)。
 

@@ -255,10 +255,35 @@ health/liveness 表示进程活着，失败可重启；ready 表示能接流量�
 
 ## 8. 本章小结与参考
 
-- 构建/类型/测试/镜像在 CI 完成，产物不可变。
-- 配置启动时校验，密钥不进镜像/日志/前端。
-- 迁移用扩展/收缩，发布用 digest，异常先回滚。
-- Capstone 用验收矩阵和失败案例证明，不用“能跑”代替。
+### 8.1 一页知识地图
+
+**本章主问题：** 怎样把“本机能跑”变成可复现构建、兼容迁移、可回滚发布和能被逐项验收的 Capstone？
+
+**一条主线：**
+
+```text
+锁文件构建 + 启动时配置校验
+→ 迁移/健康检查/发布
+→ 固定 digest + 验收矩阵与回滚方案
+```
+
+**三个关键词：** 不可变产物、兼容迁移、验收矩阵。不可变产物让各环境运行同一份代码，扩展/收缩迁移让数据库可回退，验收矩阵用证据而不是框架名证明完成。
+
+**最容易错：**
+- 用 `latest` 或可覆盖 tag 部署，在服务器上重新构建；或把只编译实验模块的 build 当成完整产物。
+- 缺环境变量拖到运行时才 `undefined`，端口 `Number` 接受 NaN；密钥进镜像、日志或前端包。
+- 发布同一刻删旧列，或以为回滚代码能撤销已写数据；让 liveness 依赖上游，把 `/health` 当 `/ready`。
+- 用 `pnpm start` 的离线脚本代替服务启动，Capstone 只演示成功路径。
+
+**与前后章：** 第 17 章提供 requestId、RED/TTFT、成本与安全边界；附录 A 需要你把验收矩阵讲成可追问的工程决策，而不是功能清单。
+
+**学完应能：**
+- 能在 CI 完成前后端构建、类型检查与测试，产出用 digest 部署的镜像，并让 `/health`、`/ready` 正确分工。
+- 能设计加 `checksum` 列的扩展/收缩迁移与回滚步骤。
+- 能按验收矩阵完成 5 分钟演示，覆盖 401、504、断流、重复审批和重启留存。
+- 能区分当前工程的真实验证、模板设计与未完成项。
+
+### 8.2 参考与后续学习
 
 参考：[Docker multi-stage](https://docs.docker.com/build/building/multi-stage/)、[The Twelve-Factor App](https://12factor.net/)、[Kubernetes probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)。
 

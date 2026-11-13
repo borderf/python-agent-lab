@@ -136,10 +136,35 @@ SSE在HTTP响应上单向推送，WebSocket支持双向消息。原生EventSourc
 
 ## 8. 本章小结与参考
 
-- `fetch` 不因 4xx/5xx 拒绝；检查 `ok` 和错误体。
-- SSE 按行/空行解析，跨 chunk 要缓冲，UTF-8 用流式解码。
-- 协议解析与业务校验分层；未知事件不能崩溃。
-- 流式失败要区分续传、重新生成和放弃，避免重复副作用。
+### 8.1 一页知识地图
+
+**本章主问题：** 模型回答逐段到达，一行 SSE 可能被切成两半，中文字符也可能被切在 UTF-8 中间——到哪一步才算一条完整事件？
+
+**一条主线：**
+
+```text
+HTTP 状态与 content-type → 字节流 → TextDecoder(stream) → 行缓冲/空行分派 → 业务事件校验 → 渲染或中止
+```
+
+**三个关键词：** SSE、增量解析、失败边界。SSE 以空行分隔事件，增量解析要跨 chunk 保住字节和半行，失败边界决定续传、重新生成还是放弃。
+
+**最容易错：**
+
+- 200 就当成功，不读错误体，也忽略 error 事件、错误的 content-type 和没有 done 的断流。
+- 直接 `split("\n")` 丢半行，或 `TextDecoder` 不加 `{stream:true}` 让中文变 U+FFFD。
+- 只认 LF，漏掉 CRLF 和 CR；未知事件名直接崩溃，或 EOF 前没有终止事件却当成正常完成。
+- 把流式请求当普通请求自动重试，重复渲染、重复计费。
+
+**与前后章：** 上一章的 signal 用于取消 reader，超时与重试边界继续沿用；下一章需要把解析器和事件类型打包成可发布的 ESM 模块。
+
+**学完应能：**
+
+- 用 1/2/3/5/7 字节切块喂同一个解析器，事件数与内容不变；
+- 在 error 事件后先通知界面，再以 `StreamFailure` 拒绝并取消剩余读取；
+- 解释为什么客户端 abort 不等于远端模型停止计费；
+- 给 token 渲染加 50ms 批量，同时保住 done 和 error 的即时性。
+
+### 8.2 参考与后续学习
 
 参考：[Fetch API](https://developer.mozilla.org/docs/Web/API/Fetch_API)、[Server-sent events](https://developer.mozilla.org/docs/Web/API/Server-sent_events)、[TextDecoder](https://developer.mozilla.org/docs/Web/API/TextDecoder)。
 
