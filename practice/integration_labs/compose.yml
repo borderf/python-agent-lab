@@ -8,9 +8,16 @@ services:
     volumes:
       - docpilot-data:/app/.learning-labs
     environment:
-      LAB_MODEL_PROVIDER: fixture
+      LAB_MODEL_PROVIDER: ${LAB_MODEL_PROVIDER:-fixture}
+      LAB_MODEL: ${LAB_MODEL:-}
+      LAB_CHAT_URL: ${LAB_CHAT_URL:-}
+      LAB_API_KEY: ${LAB_API_KEY:-}
+      # 容器内127.0.0.1指向容器自己；宿主进程运行仍默认使用回环地址。
+      LAB_OLLAMA_URL: ${LAB_OLLAMA_URL:-http://host.docker.internal:11434}
       LAB_TOKEN_A: demo-a
       LAB_TOKEN_B: demo-b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   docpilot-data:

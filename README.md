@@ -4,7 +4,7 @@
 
 **从[学习导航](docs/学习导航.md)开始。** 里面有起点自测、按成果推进的章序、两种投入范围和验收入口。架构练习、用户访谈与试点都跟随同一组项目进行。
 
-已有核心后，用[学习者契约](tests/learner/练习说明.md)继续完成持久化和跨进程审批恢复；[TS配套工程](typescript-examples/README.md)提供React、Hono、SQLite的实际回归。架构与产品练习可从[原始材料包](practice/case_studies/README.md)开始，先独立作答再读反馈。
+已有核心后，用[学习者契约](tests/learner/练习说明.md)继续验收五套契约：DocPilot 检索（20 条）、工具循环 Agent（12 条）、审批接收方（8 条）、持久化（6 条）、任务恢复（6 条）；[TS配套工程](typescript-examples/README.md)提供React、Hono、SQLite的实际回归。架构与产品练习可从[原始材料包](practice/case_studies/README.md)开始，先独立作答再读反馈。
 
 手机阅读版使用 VitePress 构建，包含中文搜索、学习路线、字号、已读标记、续读和可放大的架构图。首次发布与本地预览见[文档网站使用说明](docs/文档网站使用说明.md)。
 

@@ -76,14 +76,13 @@ recall = len(set(retrieved[:3]) & relevant) / len(relevant)
 precision = len(set(retrieved[:3]) & relevant) / 3
 first_rank = next((i for i, item in enumerate(retrieved, 1) if item in relevant), None)
 reciprocal_rank = 0 if first_rank is None else 1 / first_rank
+def reciprocal(labels, ranked):
+    first = next((i for i, item in enumerate(ranked, 1) if item in labels), None)
+    return 0 if first is None else 1 / first
 def mrr(pairs):
     if not pairs:
         raise ValueError("至少需要一道题")
-    return sum(
-        (0 if (first := next((i for i, item in enumerate(ranked, 1) if item in labels), None)) is None
-         else 1 / first)
-        for labels, ranked in pairs
-    ) / len(pairs)
+    return sum(reciprocal(labels, ranked) for labels, ranked in pairs) / len(pairs)
 assert recall == 0.5 and precision == 1/3 and reciprocal_rank == 0.5
 assert mrr([({"A", "B"}, ["C", "A", "D"]), ({"E"}, ["E"])]) == 0.75
 ```

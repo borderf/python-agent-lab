@@ -1,7 +1,9 @@
 """Minimal non-streaming client for a local Ollama service."""
 from http.client import IncompleteRead
 import json
+import os
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -19,7 +21,13 @@ def decode_json(raw: bytes | str):
 
 
 def post(path: str, payload: dict) -> dict:
-    request = Request("http://127.0.0.1:11434" + path,
+    base_url = os.getenv("LAB_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+    target = urlsplit(base_url)
+    if (target.scheme not in {"http", "https"} or not target.hostname
+            or target.username is not None or target.password is not None
+            or target.query or target.fragment):
+        raise ValueError("LAB_OLLAMA_URL must be an HTTP(S) base URL without credentials, query or fragment")
+    request = Request(base_url + path,
                       data=json.dumps(payload).encode("utf-8"),
                       headers={"Content-Type": "application/json"})
     try:

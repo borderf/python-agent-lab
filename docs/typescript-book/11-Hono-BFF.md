@@ -61,6 +61,8 @@ import app from "./app.js";
 serve({ fetch: app.fetch, port: 8787 });
 ```
 
+`@hono/node-server` 是独立的包，不在配套工程 `typescript-examples` 的锁文件内，运行前需自行安装；配套工程改用 Node 原生 `node:http` 挂载同一个 Hono 应用（见 `typescript-examples/src/server.ts`），两种方式选一种即可，不要混用端口与生命周期。
+
 ### 2.3 身份与中间件顺序
 
 本章先用Bearer建立教学边界。authenticate由服务端注入，将有效凭据映射为Actor及允许转发的upstreamToken；不能由请求体取得租户。第13章再把浏览器凭据换成Cookie会话，但继续复用搜索与转发规则。
