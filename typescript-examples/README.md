@@ -17,7 +17,7 @@ typecheck检查真实依赖的类型；test先构建，再运行Node测试。sta
 
 `pnpm serve`启动 `src/server.ts` 的 BFF Node HTTP 入口（默认 `127.0.0.1:8787`），同时托管 React 搜索页与来源摘要面板。`DOCPILOT_URL` 指向 Python 服务；开发 token `demo` 由 BFF 映射为 Python 教学身份，不是生产登录。来源面板目前只展示检索命中的引文，不会重新请求完整原文；独立来源页仍需补齐。
 
-当前宿主构建脚本使用仓库根目录的 esbuild；首次从根目录运行 `npm ci`，再进入本目录执行以上 pnpm 命令。只安装本目录依赖尚不足以构建宿主。
+当前宿主构建脚本使用仓库根目录的 esbuild；首次从根目录运行 `npm ci`，再进入本目录执行以上 pnpm 命令。只安装本目录依赖尚不足以构建宿主。GitHub Actions也按此顺序安装两处依赖；宿主通过 `scripts/build-host.mjs` 调用 esbuild JavaScript API，兼容 Windows 与 Linux，不把 CLI 二进制当作 JavaScript 交给 Node 执行。
 
 模型协议演示使用独立配置，不能将 `DOCPILOT_URL` 改成模型地址：
 

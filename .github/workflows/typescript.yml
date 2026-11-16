@@ -2,9 +2,9 @@ name: Verify TypeScript learning examples
 on:
   push:
     branches: [main]
-    paths: ['typescript-examples/**', 'docs/typescript-book/**', '.github/workflows/typescript.yml']
+    paths: ['typescript-examples/**', 'docs/typescript-book/**', 'package.json', 'package-lock.json', '.github/workflows/typescript.yml']
   pull_request:
-    paths: ['typescript-examples/**', 'docs/typescript-book/**', '.github/workflows/typescript.yml']
+    paths: ['typescript-examples/**', 'docs/typescript-book/**', 'package.json', 'package-lock.json', '.github/workflows/typescript.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,6 +20,9 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --global pnpm@10.11.0
+      - name: Install browser build dependencies
+        working-directory: .
+        run: npm ci
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
