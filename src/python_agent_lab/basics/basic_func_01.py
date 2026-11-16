@@ -21,6 +21,15 @@ def make_reader():
     return read, replace, items
 
 
+_MISSING = object()
+
+def update_note(current_note, note=_MISSING):
+    if note is _MISSING:
+        return current_note
+    return note
+
+
+
 if __name__ == "__main__":
     assert subtotal(100, count=3) == 300
 
@@ -34,6 +43,8 @@ if __name__ == "__main__":
     large = at_least(100)
     assert small(20) is True
     assert large(90) is False
+
+    # assert small.__closure__[0] is not large.__closure__[0]
 
     read, replace, original = make_reader()
     print(read.__closure__)
