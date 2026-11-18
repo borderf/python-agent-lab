@@ -1,4 +1,4 @@
-from python_agent_lab.basics.collections import (
+from python_agent_lab.basics.basic_collections import (
     get_paid_orders,
     total_amount_cents,
 )

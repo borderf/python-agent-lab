@@ -58,7 +58,7 @@ uv run --frozen python -m pytest practice/python_ai_course/checks_week01.py -q -
 
 ```powershell
 # 运行已有的订单集合示例
-uv run --frozen python -m python_agent_lab.basics.collections
+uv run --frozen python -m python_agent_lab.basics.basic_collections
 
 # 验证已实现的仓库代码；配套 TODO 用上面的显式路径检查
 uv run --frozen python -m pytest
