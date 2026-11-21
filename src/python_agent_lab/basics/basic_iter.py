@@ -55,5 +55,74 @@ def example_yield_01():
     assert events == ["done"]
 
 
+from contextlib import contextmanager, ExitStack
+
+
+def example_yield_02():
+    events = []
+
+    @contextmanager
+    def one_source(name):
+        events.append(f"open: {name}")
+        try:
+            yield name
+        finally:
+            events.append(f"close: {name}")
+
+    with one_source("A") as source:
+        assert source == "A"
+        assert events == ["open: A"]
+        events.append(f"work: {source}")
+    assert events == ["open: A", "work: A", "close: A"]
+
+
+def example_yield_03():
+    events = []
+
+    @contextmanager
+    def one_source(name):
+        events.append(f"open: {name}")
+        try:
+            yield name
+        finally:
+            events.append(f"close: {name}")
+
+    try:
+        with one_source("B") as source:
+            raise ValueError("内容无效")
+    except ValueError as exc:
+        assert str(exc) == "内容无效"
+        assert events == ["open: B", "close: B"]
+    else:
+        raise AssertionError("错误应传递到 with 外面")
+
+
+def example_yield_04():
+    events = []
+
+    @contextmanager
+    def one_source(name):
+        if name == "bad":
+            raise OSError("无法打开")
+        events.append(f"open: {name}")
+        try:
+            yield name
+        finally:
+            events.append(f"close: {name}")
+
+    try:
+        with ExitStack() as stack:
+            for name in ["A", "B", "bad"]:
+                stack.enter_context(one_source(name))
+    except OSError as exc:
+        assert str(exc) == "无法打开"
+        assert events == ["open: A", "open: B", "close: B", "close: A"]
+    else:
+        raise AssertionError("第三份来源应当打开失败")
+
+
 if __name__ == "__main__":
-    example_yield_01()
+    # example_yield_01()
+    # example_yield_02()
+    # example_yield_03()
+    example_yield_04()
