@@ -121,8 +121,39 @@ def example_yield_04():
         raise AssertionError("第三份来源应当打开失败")
 
 
+def example_yield_05():
+    events = []
+
+    @contextmanager
+    def session():
+        events.append("open")
+        try:
+            yield events
+        finally:
+            events.append("close")
+
+    """
+    进入 with，__enter__ 推进到 yield
+    @contextmanager 包装后的 __enter__ 会 next(gen)：
+
+    执行 events.append("open") → events == ["open"]
+
+    遇到 yield events：暂停，把 events 这个列表对象交出去
+
+    as trace 绑定：trace 就是 events 同一个对象
+
+    此时可以断言 trace is events 为 True。
+    """
+
+    with session() as stream:
+        stream.append("work")
+
+    assert events == ["open", "work", "close"]
+
+
 if __name__ == "__main__":
     # example_yield_01()
     # example_yield_02()
     # example_yield_03()
-    example_yield_04()
+    # example_yield_04()
+    example_yield_05()
