@@ -26,6 +26,20 @@ def example_02():
     assert a.findings is not b.findings
 
 def example_03():
+    class ReviewJob:
+        findings = []
+        def __init__(self, name) -> None:
+            self.name = name
+
+        def add(self, finding):
+            self.findings.append(finding)
+
+    a, b = ReviewJob("A"), ReviewJob("B")
+    a.findings.append("aaaa")
+    assert b.findings == ["aaaa"]
+    
+
+def example_04():
     class Limit:
         def __init__(self, value) -> None:
             if type(value) is not int or value <= 0:
@@ -43,7 +57,7 @@ def example_03():
     limit = Limit.from_text("3")
     assert limit.value == 3
     try:
-        limit.value = 4
+        limit.value = 4 # 会报错，不可以直接赋值
     except AttributeError:
         pass
     else:

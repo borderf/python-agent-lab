@@ -4,25 +4,37 @@
 
 ## 1. 学习目标与前置知识
 
-单 Agent 交付依赖第16、24章与第22章的评测方法。实现暂停、审批和恢复时接第25章；跨进程工具与多角色实验分别在有需求时接第27–28章。
+前置：第16章的审批与幂等、第22章的评测、第24章的工具循环、第25章的任务恢复。本章不要求先学MCP或多Agent。
 
-**承接与本章主线：** 把取资料、调用工具、记录进度、等待批准和恢复执行接成一次审查。分别测试资料缺失、某一步失败和重复执行；查看最终记录，确认实际写入了什么、写了几次。
+**任务卡**
+- **接收上一章什么产物：** 第25章保存、批准、冻结载荷和跨进程恢复的任务状态机。
+- **本章只新增什么：** 把采购只读工具、确定性规则和脚本化模型循环接到同一状态机。
+- **交付什么：** ProcureAgent离线审查、工具轨迹、审批记录和一次失回执恢复记录。
+- **怎样验收：** P200得到三项风险；P300保留缺资料；拒绝或改载荷零写入；同一动作恢复后业务效果一次。
 
-**本章从这里开始：** 采购审查同时涉及事实、规则、工具和审批。先让确定性流程完成一次审查，再逐步加入模型决策，才能知道错误来自业务还是Agent。
+**本章从这里开始：** 从头到尾只处理同一份采购审查请求：`P200 / tenant-a / 2026-10-01`。先让规则算对，再让模型选工具，最后单独检查批准与写入效果。
 
 ## 2. 基础知识讲解
 
-### 2.1 明确审查任务不等于最终裁决
+### 2.1 审查结论、流程状态与业务效果是三种事实
 
-采购审查含金额、日期、资格和报告组织。若一开始让模型自由判断全部条件，出错时难以分清规则错还是工具选错。先用确定性规则建立参考，再让模型选择工具；加上批准、幂等和恢复后，分别验证结论、轨迹和效果，才能对“完成”作可信解释。
+规则可以发现超预算，模型可以组织工具调用，批准可以授权提交，但三者不能互相证明。`completed`只表示约定检查已执行；缺资料应返回`needs_review`，不能把“没查到风险”写成合规。
 
-ProcureAgent针对虚构项目检查预算、预付款和供应商资格。结果区分明确预设风险、资料不足与未发现预设异常；completed表示规定流程完成，不等于真实采购合规或无需人工复核。
+**威胁模型与信任边界：** 文档字段、模型输出和用户点击都可被伪造；身份、授权与业务事实只能来自认证会话、可信工具和审批服务，不能由模型自报。
+| 边界 | 信任假设 | 必须检查 |
+| --- | --- | --- |
+| 文档与模型 → 审查器 | 内容可能含提示注入或旧数据 | 字段来源、租户、业务日期、规则版本；注入不得改写金额或权限 |
+| 审查器 → 工具 | 模型可提议，不可授予身份 | 工具与参数白名单；服务端再次授权；只读工具不得绕过写路径 |
+| 批准 → 执行器 | 审批记录由可信服务保存 | 审批人、有效期、报告版本和载荷快照；页面显示不等于已签发 |
+| 执行器 → 接收方 | 网络会重复、乱序或丢回执 | 租户、稳定动作键、幂等冲突和真实效果核对 |
 
-### 2.2 先完成确定性规则和数据工具
+提示注入的目标是改变后续模型行为，不是获得系统权限；把工具输出标记为不可信数据、限制工具权限并让确定性程序作最终判断，才能阻断“文本→动作”的越权链路。
 
-get_project和query_supplier从可信模拟服务取得资料，search_policy只返回可访问有效来源，check_rules重新核对数据并执行金额/日期规则。模型不能通过参数捏造预算、角色或付款阈值。
+### 2.2 事实与规则由可信程序提供
 
-#### 案例推进：先做可复算的虚构规则
+项目金额、供应商证书和制度版本来自模拟业务服务。模型只能提出工具请求，不能填写预算、租户、日期或付款上限。规则输出风险码、缺件码、来源ID和制度版本，便于复算。
+
+#### 案例推进：先建立可复算的规则基线
 
 ```python
 # study-example: S26A
@@ -34,254 +46,217 @@ def review(facts):
         missing.append("MISSING_PREPAYMENT")
     elif facts["prepayment_percent"] > facts["limit_percent"]:
         findings.append("PREPAYMENT_TOO_HIGH")
-    return {"status":"needs_review" if missing else "completed", "findings":findings, "missing":missing}
-
-result = review({"quote_cents":1100,"budget_cents":1000,"prepayment_percent":None,"limit_percent":20})
-assert result == {"status":"needs_review", "findings":["OVER_BUDGET"], "missing":["MISSING_PREPAYMENT"]}
+    return {"status": "needs_review" if missing else "completed",
+            "findings": findings, "missing": missing}
+result = review({"quote_cents": 1100, "budget_cents": 1000,
+                 "prepayment_percent": None, "limit_percent": 20})
+assert result == {"status": "needs_review", "findings": ["OVER_BUDGET"],
+                  "missing": ["MISSING_PREPAYMENT"]}
 ```
 
-规则只适用于本书虚构练习。completed表示当前检查流程已完成，不表示所有风险消失或现实业务自动获批；missing与已发现问题可以同时存在。证据ID与规则版本还需要进入正式结果，使别人可核对与复算。
+### 2.3 工具循环只负责取得证据
 
-### 2.3 从单Agent逐步增加执行能力
+采购工具注册表与第24章订单注册表分开，避免破坏“恰好两个订单工具”的旧契约。每轮依次做模型提议、参数校验、可信身份下执行、结果回填；未知工具和坏参数在业务调用前拒绝，步数与时限要有上限。
 
-先用固定流程取得单次正确结果，再手写模型工具循环，随后迁移图并保持同一规则和预算。持久化、人工审批和MCP各自引入一个可测量边界，不同时改数据和执行框架。
+### 2.4 批准、幂等与恢复各自解决一个窗口
 
-#### 案例推进：逐步替换决策，保留执行边界
+批准绑定报告版本与载荷摘要；修改载荷后旧批准失效。拒绝、过期或未批准时写入0次。接收方按租户和稳定动作键去重，同键同载荷返回原回执，同键换载荷报冲突。远端提交后本地丢回执时，用原键查询或重试并核对效果数，不能换键盲写。取消等待或关闭连接不等于远端效果已经停止。
 
-先让固定流程调用事实与制度工具，再让模型选择需要查询什么。比较同一案例的规则结果与工具轨迹，模型负责组织解释，数值与权限仍由程序检查。无资料不能由模型补全为合规。
+**审批绑定必须覆盖动作身份：** 可信审批记录至少绑定`tenant_id/task_id/action_key`、审批人、有效期、报告版本和`payload_hash`，并在执行时检查是否已使用或撤销。
+- 载荷摘要对 canonical JSON计算：固定Schema、键排序、金额用整数分、日期用统一格式；不能哈希展示后可继续修改的字典。
+- 摘要覆盖项目、收款方、金额、币种、付款日期、载荷版本等全部生效字段；任何字段改变都生成新动作和新批准。
+- Hash只用于完整性比较，不是签名；审批记录必须存放在模型不可写的可信存储，执行器重新读取，不能信任请求里夹带的`approved=true`。
+- 同键同载荷可重放已批准动作，同键换载荷必须冲突；批准过期、任务改派或动作已执行都不能悄悄复用旧授权。
 
-### 2.4 写入与恢复采用独立验收
-
-只在模拟业务服务演示提交报告，审批绑定载荷。拒绝时零写入，重复resume不重复产生效果，外部成功后本地崩溃通过幂等键查询或对账。身份与图执行记录重新校验，不能任意恢复他人任务。
-
-#### 案例推进：写入与协作最后独立验收
-
-只读审查稳定后，加入候选报告、人工批准、幂等提交与恢复。拒绝/过期批准不写，重复恢复仍一个业务效果；再按真实需要加入图、MCP或专家分工。每次演进明确新增失败面、预算与回退方案。
-
-面试演示至少包含正常、风险、缺资料、历史制度、越权和写入后崩溃。项目一页纸中的指标由自己的固定集与环境填入，不把教材目标写成已经取得的结果。
-
-### 2.5 多Agent仍是实验变量
-
-资格、预算、合同分工使用共同结构，比较固定流程、单Agent和专家协作。子任务超时、证据冲突和返工预算都保留明确结果。若收益不足，主路径可以保持单Agent，实验本身仍完成学习目标。
-
-### 2.6 展示能力也展示限制
-
-准备正常、多异常、缺资料、历史日期、另一租户、审批拒绝、重复恢复和注入案例。演示时先说标准预期，再展示工具证据和实际状态，不用最终自然语言替代规则核对。
+UI预览、审批签发和动作执行是三个时刻；只有签发时冻结的快照与执行时重新计算的摘要一致，批准才有效。
 
 ## 3. 原理讲解与推导
 
-### 3.1 分别验证业务、决策和执行
+### 3.1 把决策记录与效果账本分开，才能定位失败
 
-规则函数错、模型选择错和恢复导致重复写入是不同问题。固定规则基线使这些错误可以分离；图框架和多Agent不能修复所有层的问题。
+同一请求依次产生三种记录：模型选了什么、任务停在哪一步、接收方实际产生了什么效果。规则错误只污染结论，模型错误只污染工具轨迹，恢复错误可能增加业务效果。分别保存这三种记录，故障注入才能指出第一个分叉，而不是用“任务已完成”掩盖重复写入。
 
-### 3.2 审查证据应能够复算
+**效果账本与对账：** 账本字段包括租户、任务、动作键、载荷摘要、请求ID、接收方回执、效果数与时间；调用前先写意图并预留未知状态，后续按回执更新。本地`completed`只是决策状态，不是效果证据。
+- 丢回执后先保持`unknown`，用原键查询或同键同载荷重试；未知状态不能自动改成失败，也不能新建动作键。
+- 对账比较意图、回执和效果账本的租户、动作键、载荷摘要与数量；缺失、重复或不一致分别进入补单、阻止重放和人工处理。
+- “恰好一次业务效果”需要接收方把唯一键与效果放在同一事务；若外部副作用无法入事务，只能证明至少一次投递，并用查询、幂等或业务补偿收敛结果。
 
-保存项目、供应商、制度版本和日期，确定性计算可以重新核对。结果需要指向真实输入和规则，而不是只留下模型当时的一段描述。
+**审计不可篡改是有边界的：** 应用账号只可追加、禁止更新删除，敏感载荷脱敏，并用Hash链、独立WORM存储或外部锚点检测事后改写。Hash链只有在链头、签名密钥或锚点由可信边界保管时才有意义；若攻击者能改写同库账本并重算整条链，就不能靠它发现篡改。WORM也需要独立权限边界。这些措施能发现篡改，不能阻止拥有数据库或签名密钥的特权管理员。审计证明“记录过什么”，业务效果仍以接收方账本和业务系统为准。
+
+**能力边界：** 本章离线示例验证规则、脚本循环与SQLite恢复参考；真实模型、MCP、LangGraph跨进程恢复、真实远端和多Agent均未因此获得运行证据，生产认证、并发与灾备也未验收，材料中必须标为未完成或设计假设。
 
 ## 4. 示例与逐步走查
 
-### ProcureAgent 固定演示
+固定输入来自[项目数据](../../practice/enterprise_ai/data/projects.json)：P200报价12000000分、预算10000000分、预付款25%；S200证书在2026-09-01到期。当前制度上限20%，因此预期风险为`OVER_BUDGET`、`PREPAYMENT_TOO_HIGH`、`EXPIRED_CERTIFICATE`。
 
-对P200、tenant-a、2026-10-01，规则预期识别超预算、预付款过高、证书过期；改为2026-06-01时预付款和证书适用情况改变，仅保留超预算预设风险。
+#### 案例推进：第一步，用同一请求跑通工具循环
 
-P300应标记缺预付款比例与资格材料，不推断通过。审批拒绝零写入；同一动作重复恢复仅产生一次模拟业务效果。使用数据目录标签逐项核对，而不是凭自然语言流畅程度打分。
+下面用脚本替身压缩展示循环。它从真实数据文件取事实；接真实模型时仍使用第24章的决策解析、调用ID和预算检查。
 
-### 4.1 沿输入到结果逐步解释
+```python
+# study-example: S26B
+import json
+from practice.enterprise_ai.policy_agent import lookup_limit
+from practice.enterprise_ai.retrieval_baseline import DATA
+tenant = "tenant-a"
+data = {name: json.loads((DATA / f"{name}.json").read_text(encoding="utf-8")) for name in ("projects", "suppliers", "policies")}
+def only(name, key, value):
+    matches = [row for row in data[name] if row["tenant_id"] == tenant and row[key] == value]
+    if len(matches) != 1: raise LookupError("resource unavailable")
+    return matches[0]
+def get_project(project_id):
+    row = only("projects", "project_id", project_id)
+    return {k: v for k, v in row.items() if k != "tenant_id"}
+def get_supplier(supplier_id):
+    row = only("suppliers", "supplier_id", supplier_id)
+    return {k: v for k, v in row.items() if k != "tenant_id"}
+def get_policy(as_of):
+    return lookup_limit(data["policies"], tenant, as_of)
+def review(project_id, as_of):
+    results, trace = {}, []
+    for name in ("get_project", "get_supplier", "get_prepayment_limit"):
+        if name == "get_project":
+            arguments = {"project_id": project_id}
+        elif name == "get_supplier":
+            arguments = {"supplier_id": results["get_project"]["supplier_id"]}
+        else:
+            arguments = {}
+        function = {"get_project": get_project, "get_supplier": get_supplier,
+                    "get_prepayment_limit": get_policy}[name]
+        result = function(as_of=as_of, **arguments) if name == "get_prepayment_limit" else function(**arguments)
+        results[name] = result
+        source_id = (result.get("source_id") or arguments.get("project_id")
+                     or arguments.get("supplier_id"))
+        trace.append({"tool": name, "source_id": source_id, "arguments": arguments})
+    project, supplier, rule = (results[name] for name in ("get_project", "get_supplier", "get_prepayment_limit"))
+    findings, incomplete = [], []
+    if project["quoted_amount_cents"] > project["budget_cents"]:
+        findings.append("OVER_BUDGET")
+    if project["prepayment_percent"] is None:
+        incomplete.append("prepayment_percent")
+    elif project["prepayment_percent"] > rule["limit_percent"]:
+        findings.append("PREPAYMENT_TOO_HIGH")
+    if supplier["certificate_valid_until"] is None:
+        incomplete.append("certificate_valid_until")
+    elif supplier["certificate_valid_until"] < as_of:
+        findings.append("EXPIRED_CERTIFICATE")
+    report = {"project_id": project_id, "supplier_id": supplier["supplier_id"], "as_of": as_of,
+              "status": "needs_review" if incomplete else "completed", "findings": findings,
+              "incomplete": incomplete, "policy_source_id": rule["source_id"]}
+    return report, trace
+report, trace = review("P200", "2026-10-01")
+assert report["findings"] == ["OVER_BUDGET", "PREPAYMENT_TOO_HIGH", "EXPIRED_CERTIFICATE"]
+assert report["policy_source_id"] == "policy-a-current"
+assert [item["source_id"] for item in trace] == ["P200", "S200", "policy-a-current"]
+old_report, _ = review("P200", "2026-06-01")
+assert old_report["findings"] == ["OVER_BUDGET"]
+missing_report, missing_trace = review("P300", "2026-10-01")
+assert missing_report["status"] == "needs_review"
+assert missing_report["incomplete"] == ["prepayment_percent", "certificate_valid_until"]
+assert [item["source_id"] for item in missing_trace] == ["P300", "S300", "policy-a-current"]
+print(json.dumps({"report": report, "trace": trace}, ensure_ascii=False))
+```
 
-先用P200的报价与预算作确定性比较，再根据任务日期选预付款条款，并核对资格有效期。当前日期会触发三类预设风险；改变日期后，有些资料和规则的适用性随之变化，不能照抄上一次结论。
+预期输出包含三项风险和依次执行的三个工具，轨迹中的来源ID分别为P200、S200和制度来源。若最终文本碰巧正确但轨迹缺工具证据，工具使用仍判失败。把日期改为2026-06-01，应使用旧制度且证书有效，只剩超预算；把项目改为P300，应动态查询其供应商S300，预付款与证书为空并进入`needs_review`。
 
-P300资料不足时，没有发现风险不能推出通过，因为程序尚未完成对应检查。结果必须保留缺口，交给复核或补充资料，而不是让模型填满字段。
+#### 案例推进：第二步，把报告放进受批准的写入动作
 
-最后才检查写入：拒绝批准应没有效果；同一动作重复恢复应确认同一效果。结论、资料完整性和实际执行，是三组独立验收。
+以下直接调用仓库的[审批接收方](../../practice/learning_projects/approval_reference.py)和[恢复参考](../../practice/learning_projects/resume_reference.py)。`approved_hash`是可信批准边界的输入，示例本身不实现登录、签发或撤销。
+
+```python
+# study-example: S26C
+from contextlib import closing
+from pathlib import Path
+import json, sqlite3
+from tempfile import TemporaryDirectory
+from practice.learning_projects import resume_reference as resume
+def effect_count(path):
+    if not path.exists(): return 0
+    with closing(sqlite3.connect(path)) as db:
+        return db.execute("SELECT count(*) FROM effects").fetchone()[0]
+def rejected(call):
+    try:
+        call()
+    except PermissionError: return
+    raise AssertionError("unapproved or stale write must fail")
+
+with TemporaryDirectory() as directory:
+    tasks, effects = Path(directory) / "tasks.sqlite", Path(directory) / "effects.sqlite"
+    scope = {"tenant_id": "tenant-a", "task_id": "R1"}
+    send = lambda version, **kw: resume.resume(tasks, effects, expected_version=version, **scope, **kw)
+    approve = lambda task: resume.approve(tasks, expected_version=task["version"], expected_hash=task["payload_hash"], **scope)
+    payload = {"project_id": "P200", "version": 1, "findings": ["OVER_BUDGET", "PREPAYMENT_TOO_HIGH", "EXPIRED_CERTIFICATE"]}
+    task = resume.prepare(tasks, payload=payload, **scope)
+    rejected(lambda: send(1))
+    assert effect_count(effects) == 0
+    task = approve(task)
+    changed = resume.change_payload(tasks, expected_version=1,
+                                    payload={**payload, "version": 2}, **scope)
+    assert changed["approved_hash"] is None
+    rejected(lambda: send(2))
+    assert effect_count(effects) == 0
+    approve(changed)
+    try:
+        send(2, fail_after_commit=True)
+    except RuntimeError as error:
+        assert "after commit" in str(error)
+    else:
+        raise AssertionError("lost reply must be injected")
+    receipt = send(2)
+    assert send(2) == receipt and effect_count(effects) == 1
+    status = resume.load(tasks, **scope)["status"]
+    print(json.dumps({"status": status, "business_effects": effect_count(effects)}, ensure_ascii=False))
+```
+
+预期输出为`completed`和1次业务效果。恢复必须核对接收方账本；只把本地状态改成completed不能证明写入正确。
+
+#### 案例推进：第三步，用故障记录决定下一步复杂度
+
+保留正常、缺资料、历史日期、越权、未知工具、批准拒绝、改载荷和失回执八类记录。只有确实需要跨进程共享或专家分工时，才进入第27–28章；它们不是ProcureAgent主路径的前置。
 
 ## 5. 动手练习
 
 ### 本章累计任务：组合受控审查
 
-同一项目分别运行固定规则与单Agent，保存工具轨迹、缺资料、批准与回执。注入一次远端已提交后中断，换进程恢复并核对效果。
-
-**未通过时怎样定位：** completed表示流程完成，不表示业务合规；缺资料不能当零风险；不同模型与数据版本不能混作同一对照。
-
-**带到下一步：** 有协议共享或分工假设才进入第27–28章，否则直接整理作品。
-
-下方专题练习用于补当前卡点；先完成这一项累计任务，不另将所有索引作为必须并行完成的进度。
-
-### 里程碑一：审查基线
-
-对[review_cases.json](../../practice/enterprise_ai/data/review_cases.json)中基础案例实现确定性审查。核对P100正常、P200三类问题、P300缺资料、历史制度、越权和未知项目，状态与发现必须来自实际数据规则。
-
-### 里程碑二：工具循环与恢复
-
-先冻结第24章的订单工具契约：`contract_agent.py` 明确要求 `tool_specs()` 恰好只有 `get_paid_total` 和 `get_order`，不要直接把采购工具塞进同一个注册表，否则旧契约会失败。按下面顺序迁移：
-
-1. **保留旧实现和旧契约。** 让 `practice.learning_projects.agent_reference` 继续通过 `contract_agent.py`，确认订单工具的校验、白名单和预算没有回归。
-2. **抽出通用循环。** 把“模型请求→解析决策→查工具→校验参数→执行→回填结果”抽成不依赖具体工具的循环；循环只接受 `tool_specs` 和 `execute_tool` 作为注入边界。
-3. **建立审查工具注册表。** 在 `review_agent.py` 中定义采购只读工具和对应的 `execute_tool`；不要修改旧 `tool_specs()` 的返回值，也不要让两套工具共用一个“恰好两个”的断言。
-4. **新增审查行为检查。** 为审查工具写独立测试：未知工具/坏参数/越权项目/缺资料/预算耗尽/审批恢复各自断言工具调用和业务效果；原订单契约继续跑，作为回归。
-5. **最后接 HTTP/恢复。** 审查循环通过自己的契约后，再接第25章的持久任务和审批；不要把“旧契约通过”当成“审查 Agent 完成”。
-
-这样，通用循环、订单工具、审查工具是三层：循环不拥有工具，订单测试守护旧边界，审查测试守护新边界。两套都可以通过，不需要放宽旧契约的“恰好两个工具”断言。
-
-然后用[审批契约](../../tests/learner/练习说明.md#审批与幂等契约)写 `learner_approval.py`，把写入放进受保护的动作。
-
-然后将[真实审批恢复实验](../project-practice/从实验到项目交付.md#用真实-langgraph-暂停并跨进程恢复)接到自己的任务 ID、可信身份和报告版本，保留独立进程重启检查。再用同一动作键让模拟服务处理提交，核对账本中的效果数量。
-
-复用相同工具接入Agent，保留固定流程对照；再实现审批、持久状态、重复恢复和写入后崩溃。拒绝/过期审批写入0次，重复恢复与对账最终业务效果1次。
-
-### 里程碑三：有依据的演进
-
-按实际需求选择图、MCP与多角色，不要求一次加入全部组件。用固定集与故障演练证明每一步的行为，交付规则/来源版本、证据、状态、轨迹、环境和局限。任务完成不等于所有风险消失，缺资料必须交复核。
-
-### 从固定审查到工具循环：六个中间产物
-
-每一步先留下可检查的产物，再进入下一步；不要直接跳到“Agent 完成”。
-
-| 步骤 | 中间产物 | 预期结果 | 失败时先看 |
-| --- | --- | --- | --- |
-| 1. 手算基线 | 一张 P200 风险表 | 超预算、预付超限、证书到期三项，各带规则/输入/证据 | 业务日期是否用错；金额单位是否分 |
-| 2. 固定规则报告 | `report.json` | 风险集合与手算一致；缺资料为 unknown，不是零风险 | 规则顺序、字段缺失、历史版本 |
-| 3. 工具注册表 | `tool_specs()` 与审查工具 | 只读工具白名单；未知工具/坏参数业务调用 0 次 | 是否把写工具放进只读注册表 |
-| 4. 脚本化模型轨迹 | messages + trace | 先请求未知工具→被拒；再请求合法工具→取得证据；最后 JSON | 参数是否被模型覆写；call_id 是否重复 |
-| 5. 审批动作 | approval + action ledger | 批准绑定载荷版本；改载荷后旧批准失效；重复恢复效果 1 次 | 是否只检查“已批准”而没检查版本 |
-| 6. 故障恢复 | 两侧持久记录 | 远端成功/本地缺回执 → 对账后 1 次效果；不伪造确定结论 | 是否用新动作键重试；是否把 pending 当失败 |
-
-每个产物都要有“正常 + 一个反例”。例如第 4 步的 trace 必须包含一次**未知工具被拒**和一次**合法工具执行**；只有成功轨迹，不能证明白名单和业务调用次数。
-
-#### 第 26 章的最小可演示路径
-
-```text
-P200 手算风险表
-→ 固定规则 report.json
-→ 审查工具注册表（与订单契约分开）
-→ 脚本化模型两轮 trace
-→ 审批绑定载荷
-→ 模拟远端成功后丢回执，恢复对账
-```
-
-每一步都能单独验收；全部串起来才是受控审查。真实模型、LangGraph 跨进程恢复和真实远端仍按项目装配手册单独记录，不能由离线脚本通过代替。
-
-### 用同一个案例验收规则、Agent 决策与写入效果
-
-1. **先手算。** 打开[项目数据](../../practice/enterprise_ai/data/projects.json)中的 P200。报价 12000000 分、预算 10000000 分，超出 2000000 分；预付 25%，在 2026-10-01 超过当前 20% 的上限；S200 证书在 9 月 1 日到期。三项各自保留规则、输入与证据。把业务日期改到 6 月 1 日，报价仍超预算，当时 30% 的上限与尚有效的证书会令其他两项消失。
-2. **有了参考结果，再让模型选工具。** 固定工作流依次取项目、供应商、制度并执行确定性检查。手写循环复用这些函数，每轮保留模型请求的工具名、校验后的参数、实际执行状态与回传的调用 ID。让测试替身先请求未知工具，再请求合法工具。预期前者的业务执行次数为零，后者真正产生工具结果；超过步数或总时限时停止并给出明确状态。
-3. **区分结果正确与碰巧猜中。** 将同一批案例分别送给固定工作流、替身和真实模型。逐题核对风险集合、缺件、有效来源和停止原因。若最后文本答对但轨迹中未取得所需凭据，本题的工具使用和证据项仍失败。展示一次模型选错工具后的处理；重试开销算入总耗时与用量。
-4. **最后加写入。** 对同一份待提交报告分别演示拒绝、批准后改内容、批准后重复恢复、模拟远端成功但本地缺回执。前两种写入数为零，后两种每个合法动作只有一条效果。用两侧持久记录核对结果；当远端不能查询也不接受稳定键时，保留待对账状态并交人工处理。先运行[双库恢复实验](../architecture-book/附录D-架构实验与评审实操.md)，再将相同的故障放到自己的提交接口。
-
-**迁移题。** 给审查增加一份证书缺失的材料。先不改代码，写下“资料不足”和“证书过期”在数据、规则、返回状态和用户下一步操作上的差别。运行 P300，再换一组项目与供应商 ID 重测。按 [review_cases.json](../../practice/enterprise_ai/data/review_cases.json) 核对预期，防止实现记住案例编号。保留从用户提交到最终业务状态的演示，即可独立于多 Agent 实验交付这一版。
-
-### 与使用者一起做一次发布演练
-
-从空状态启动一份独立测试部署。让同伴按说明自行提交陌生任务，记录请求 ID、首次有用结果和总耗时。然后注入一次可恢复故障：例如让模拟服务在写入后丢失回执。先从界面记录用户看到了什么，再用同一请求或任务 ID 串起 API、模型、工具、动作账本及恢复结果。验收时给出旧任务确定的业务效果数量、受影响请求数和恢复耗时。
-
-再尝试只切换模型或索引版本，先跑固定回归题，达到你预先定义的错误或成本阈值时切回可用版本。发布记录分开填写部署成功、真实模型行为、用户能否独立完成任务三项。将一条导致返工的问题转成回归题，附上修复前后的演示命令和已知边界。前端呈现与支持交接沿用[产品发布手册](../product-founder-book/附录F-上线发布与推广实验.md)。
-
-### 先为一个真实工具建立可重复的版本比较
-
-已完成工具循环与真实模型适配后，沿用第18章的模型配置，在仓库根目录执行下列命令。第一条是评分器的自检，第二条才会测量你所选模型的决策。
-
-```powershell
-uv run --frozen python -m practice.enterprise_ai.policy_agent --compare --trials 2
-uv run --frozen python -m practice.enterprise_ai.policy_agent --model $env:LAB_MODEL --compare --trials 3
-```
-
-程序固定模型、三道现行/历史/边界日期题、工具实现和生成预算，只改变提示。每行 JSON 输出案例、提示版本、试次、耗时、实际执行的工具、可取得的 token 计数、最终结构与通过标记。末行统计每种提示的通过次数与尝试次数。判定要求实际观察到证据、百分数符合制度并引用该日期的标注来源。失败仍进分母；支持用量时，可用输入输出用量按实际计价记录费用，未提供时保留为空。
-
-同一题的三次尝试分别通过两次和三次时，除了总体通过比例，还要指出哪一题始终可靠、哪一题偶发失败。按案例逐项配对找回退，再选一条失败轨迹解释原因。替身机械复述工具结果，两种提示都通过仅说明执行器和评分器能配合。三道日期题也只覆盖一种可确定评分的任务。
-
-下一步为自由问答手工标注“引用存在、是否逐项支持结论、应该拒答时有无拒答”。请两个人独立判一小批回答，先讨论分歧并改评分说明，再检查自动裁判与人工的一致性。冻结留出题；遇到新失败，脱敏后加入开发回归集。保存同一个模型和数据版本作为回退基线。
-
-#### 从三道日期题扩到完整任务案例
-
-三道日期题只覆盖“工具结果决定答案”的一种任务。保留它们作为可确定评分的基线，再增加下面这组固定案例；每条都记录工具选择、参数、任务结果和外部效果次数：
-
-| 案例 | 预期工具/结果 | 必须记录 |
-| --- | --- | --- |
-| 未知工具 `delete_everything` | 拒绝，业务调用0次 | 工具名、拒绝层、调用次数 |
-| 参数缺字段/类型错误 | 拒绝，业务调用0次 | 原始参数、校验错误、调用次数 |
-| 请求另一租户项目 | 404/无权限，不返回内容 | 可信身份、资源ID、是否泄漏 |
-| 缺证书/缺资料 | needs_review/unknown，不伪造通过 | 缺件字段、来源、复核状态 |
-| 预算/步数耗尽 | 明确停止，不继续调用 | 已用步数、token/金额、停止原因 |
-| 批准后载荷变化 | 旧批准失效，写入0次 | 版本/hash、批准记录、效果数 |
-| 远端成功但本地缺回执 | 对账后1次效果，不重复写 | 动作键、回执、效果数 |
-
-评分器要把“最终文本正确”和“轨迹正确”分开：文本碰巧答对但没调用所需工具，本题仍算工具/证据失败；工具调用正确但最终业务状态不对，也不能算完成。先按固定集报告每类通过率与关键错误，再看成本/延迟；样本少时不给总体百分比承诺。
-
-### 累计交付：受控审查交付
-
-当前任务：相同项目先用确定性规则，再用工具循环与持久恢复；批准绑定载荷，重复恢复不增加副作用。
-
-继续之前：保存轨迹、效果数量、失败与成本。第27–28章仅在已有共享或分工问题时增加复杂度。
+在同一份P200请求上完成确定性基线、采购工具循环和审批恢复。保留`report.json`、`trace.jsonl`、任务状态与效果账本；用P300证明缺资料不伪造通过，用失回执证明恢复不增加效果。旧订单契约继续通过，采购工具使用独立注册表。真实模型、LangGraph跨进程恢复和真实远端分别记录验证范围，不能用离线替身结果代替。
 
 ## 6. 验收与自测
 
-**跨章节组合验收：** 工具执行采用第11章的待处理规模与退出约束；消息满足第24章的预算、调用ID与结果对应；任务和摘要遵守第25章的身份、来源与状态区分；评测记录每道题的结果及失败。审批、权限与外部效果仍由确定性程序和真实后端验证。
+**验收产物：** 上述报告、轨迹和效果数；再运行一次可重复的提示版本比较。
 
-**行为验收：** P100无预设风险、P200三项、P300资料不足；历史日期符合旧版；审批与幂等故障可复现。
+### 先为一个真实工具建立可重复的版本比较
 
-**原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
+```powershell
+uv run --frozen python -m practice.enterprise_ai.policy_agent --compare --trials 2
+```
+
+命令固定三道日期题、工具和评分规则，逐行输出JSON，末行汇总每种提示的通过数与尝试数。替身下每个提示为6/6，只证明执行器与评分器配合；真实模型比较与用量记录见[评测与故障演练](../project-practice/评测与故障演练.md)。
 
 ### 6.1 先预测，再查看参考推导
 
-result中completed是否应该等同passed？为什么missing不能视为零风险？
+`completed`是否等于“采购合规”？
 
 <details>
 <summary>完成预测后查看解释</summary>
 
-流程结束与业务结论不同，completed只表示已完成约定检查。缺资料意味着无法判定，必须保留unknown/复核状态，不能将没有查到问题当成已经证明不存在问题。
+不等于。它只表示当前约定的检查执行完毕。缺资料需要复核，预设风险需要处置，真实写入还要核对业务效果；这些结论不能互相替代。
 
 </details>
 
 ## 7. 面试问答与迁移
 
-用一个重复写入故障解释你的恢复设计；说明哪些能力真正完成、哪些仍是实验。
-
-**参考回答：**
-
-1. 先画时间线：接收方成功提交→回执丢失→本地结果未知→新进程恢复。按已验证的接收方契约查询或同键同载荷重试，展示原回执与效果数为1；不能只展示本地任务变成completed。
-2. 同键换载荷应报冲突；修改报告后旧批准应按约定失效，并创建明确的新批准/动作。接收方契约中的approved_hash来自可信边界这一前提，不等于练习已实现真实审批人的登录、批准签发与撤销全流程。
-3. 介绍作品时分列自己已实现、运行过的参考、设计理解与尚未验证。仓库有本地工具循环和图恢复示例；真实模型任务成功率、真实远端幂等、公开部署和多Agent收益，都需要各自证据，不能由本地通过推断。
-
-**换条件自测：** 在同一节点的外部写入前、提交后和本地记账后分别中断。解释每个窗口恢复读什么、是否可能重复及如何判定未知结果，给出实际故障记录。
+**问：远端已经提交但本地没有回执，为什么不能直接换一个动作键重试？**
+答：新键会绕过接收方去重，可能产生第二次效果。应先冻结载荷，用原租户和动作键查询或同键同载荷重试；接收方不支持这些契约时，保留未知状态并对账或交人工处理。
+**问：审批通过后修改报告，或用户取消等待，分别意味着什么？**
+答：修改报告使原批准失效，必须重新批准；取消本地等待只停止本地调度，不保证已经发出的远端写入停止，仍需查询动作状态和实际效果。
 
 ## 8. 本章小结与参考
 
-### 8.1 一页知识地图
+- 主线是“可信事实 → 工具轨迹 → 确定性结论 → 批准与效果核对”，不是堆叠框架。
+- P200用于完整正例，P300用于缺资料反例；日期变化必须重新选择制度版本。
+- 审批绑定载荷，幂等绑定租户与动作键，恢复核对真实效果，三者缺一不可。
+- 第27–28章按需选修；没有共享或分工问题时，直接进入[第29章](29-原理面试：语言、工程与AI的追问.md)整理作品证据。
 
-**本章主问题：** 采购审查里，规则、模型决策与真实写入，怎样分别验收而不互相顶替？
-
-**一条主线：**
-```text
-可信项目与制度数据 → 确定性规则基线、单 Agent 工具循环、图与审批 → 风险、缺资料与写入效果三组结论
-```
-
-**三个关键词：** 规则基线、状态、效果数。规则基线给可复算答案，状态区分完成与通过，效果数证明写入只发生一次。
-
-**最容易错：**
-- 把 completed 当 passed，缺资料时“没发现风险”被写成合规。
-- 让模型用参数填写预算、比例或租户，绕过可信数据。
-- 审批拒绝仍写入，或修改载荷后沿用旧批准。
-- 远端已提交但本地缺回执时直接重试，产生两次效果。
-
-**与前后章：** 第 24–25 章的工具循环与恢复在这里合成一条审查流程；需要跨进程共享或分工时再进第 27–28 章。
-
-**学完应能：**
-- 对 P100、P200、P300 与历史日期手算并跑出规则结果，说明每项发现来自哪条规则与证据。
-- 在同一案例上比较固定流程、单 Agent 与恢复轨迹，区分“文本答对”和“证据齐全”。
-- 演示拒绝零写入、批准后改载荷失效、重复恢复只产生一次效果。
-- 用一页纸交付规则与来源版本、轨迹、效果数与已知限制。
-
-### 8.2 日常工作注意事项
-
-- 金额、预算、日期与供应商资格来自可信业务数据并由代码复核，不接受模型自行填写事实或阈值。
-- 缺证明或某工具超时不代表审查通过；保留partial或needs_review等明确结果，提示下一步补件或重试。
-- 批准后修改项目或报告载荷应重新核对授权与证据；演示重启恢复时，同时检查远端效果没有重复。
-
-### 8.3 参考与后续学习
-
-已完成主线的受控动作交付。确有工具跨进程共享或分工假设时，继续第27–28章；否则直接进入[第29章原理迁移](29-原理面试：语言、工程与AI的追问.md)。
-
-ProcureAgent汇合语言、工程、证据和执行控制。接下来用原理追问和系统设计检查知识能否迁移到新条件。
-
-官方参考：[本章资料](https://docs.langchain.com/oss/python/langgraph/persistence)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
+参考：[LangGraph持久化](https://docs.langchain.com/oss/python/langgraph/persistence)、[审批与幂等契约](../../tests/learner/练习说明.md#审批与幂等契约)。框架版本以实践时的锁文件为准。
 
 [上一章](25-LangGraph、状态、Checkpoint与人工审核.md) · [下一章](27-MCP与跨系统工具边界.md)

@@ -4,238 +4,209 @@
 
 ## 1. 学习目标与前置知识
 
-把业务库封装成可测试接口。前置：第12–14章。
+前置：第12–14章。要把已有订单函数封装成可测试接口，而不是在路由里再写一套业务规则。
 
-**承接与本章主线：** 原先在代码里调用的函数，现在要让其他程序通过HTTP使用。本章依次处理输入校验、用户身份、业务调用、错误返回和连接关闭；下一章再保存长期任务的进度。
+**任务卡**
+- 接收：第12章 `build_report`、第14章 `fetch_orders` 及其错误类型。
+- 只新增：FastAPI 请求/响应模型、依赖注入、应用 lifespan 和接口测试。
+- 交付：`order_service/main.py` 与 `tests/test_api.py`，提供 `/reports` 和 `/external-report`。
+- 验收：200/422/409/502 路径可区分，非法请求不调用业务，应用退出后共享 HTTP 客户端关闭。
 
-**本章从这里开始：** 订单能力需要提供给其他系统。接口不只是把函数放到URL后面，还需要明确数据从哪里来、身份由谁提供、错误怎样返回、连接何时关闭。
+**本章从这里开始：** 同一份订单规则现在要供其他系统调用。接口多了一层输入、身份、错误和资源责任；路由只做协议转换，业务仍留在原函数。
 
 ## 2. 基础知识讲解
 
-### 2.1 从一个请求进入服务开始
+### 2.1 请求模型与响应模型约束不同边界
 
-本地调用汇总函数时，参数由我们写代码提供；开放HTTP接口后，客户端可能提交缺字段、类型错误或无权访问的数据。因此先检查请求内容，再确认请求者有权执行操作，最后调用业务函数。数据库连接等资源何时创建、何时关闭，也要另行安排。下面逐项补齐，而不是把这些责任都塞进一个路由函数。
+请求模型拒绝缺字段、错误类型、负数、额外字段和非法状态；响应模型只公开约定结构。验证失败发生在业务调用前，业务冲突不应被改写成 422 或空结果。
 
-先从GET /health开始：浏览器发来方法与路径，应用找到处理函数，函数返回健康状态。这个“方法和路径到函数”的映射叫路由。下一步再为资料查询加来源ID，为检索加过滤条件，为提交资料加请求体。分别对应路径参数、查询参数和请求体模型，先跑通一种输入，再增加下一种。
+路径参数标识资源，查询参数表达筛选，JSON 请求体表达结构化输入。不要在多处放同一个金额并依赖隐含优先级。
 
-先完成health，再添加报告接口。每个接口写清输入、状态码、成功结构和错误结构，不要等实现结束后才补文档。
+FastAPI 中写在路径模板里的参数来自 path；未嵌入路径的函数标量参数通常来自 query；单个 Pydantic 参数作为整体 body；header/cookie 要显式声明。重复 query 参数是否接收列表由类型契约决定。先列出每个字段的唯一来源，再处理默认值和覆盖规则。
 
-#### 案例推进：从路径、查询和请求体分清输入
+`strict=True` 阻止 JSON 字符串 `"1990"`、布尔值等被强转成 int，`extra="forbid"` 拒绝未知字段；约束仍只覆盖形状，不去空白、不判断租户归属、不解决同 ID 冲突。`response_model` 在输出边界过滤、序列化并再次校验；返回结构不匹配是服务端契约错误，通常导致 5xx，不应伪装成请求 422。
 
-`/orders/A`中的A常是路径参数，`?status=paid`属于查询，POST中的JSON属于请求体。路径标识资源，查询表达筛选，请求体表达结构化输入；按契约选择，不能让同一个金额在三个位置有冲突优先级。
+### 2.2 依赖注入提供可替换协作者
 
-以下是FastAPI与Pydantic v2示例；需要对应依赖。它故意只处理请求体，不把认证系统混入第一步。
+业务函数、外部客户端和可信身份由依赖边界提供。路由不读取环境，也不创建全局客户端；测试可替换依赖，同时仍执行真实授权与业务规则。本最小示例只演示业务与客户端注入，认证方案必须在部署前补齐。
 
-```python
-# framework-example: F15
-from fastapi import FastAPI
-from pydantic import BaseModel, ConfigDict, Field
+### 2.3 请求依赖的 yield 负责请求范围清理
 
-app = FastAPI()
-class Input(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    amount_cents: int = Field(ge=0)
-class Output(BaseModel):
-    amount_cents: int
-    label: str
-@app.post("/preview", response_model=Output)
-def preview(body: Input):
-    yuan, cents = divmod(body.amount_cents, 100)
-    return {"amount_cents":body.amount_cents, "label":f"{yuan}.{cents:02d}"}
-```
+用 `Depends` 注入带 `yield` 的依赖时，进入生成器以取得资源，端点结束后继续执行生成器尾部；释放放进 `finally`，异常和取消也会走到清理。默认依赖按请求缓存，同一请求多次 `Depends` 不一定重复创建；应用级客户端仍归 lifespan，不能在每个请求的 yield 中关闭。
 
-请求先经过结构验证，再进入函数，响应模型限制公开输出。路由负责映射，不应复制一套金额算法到每个端点。OpenAPI与/docs帮助理解接口形状，但不是业务规则、权限和错误策略的全部证明。
+生成器只能 yield 一次；yield 之前的失败还没有可释放资源，yield 之后则必须让清理覆盖异常路径。需要确认清理次数时，在正常、业务失败和取消三条路径分别记录事件。
 
-### 2.2 请求与响应模型分别约束边界
+依赖清理与响应发送的先后顺序取决于框架版本和依赖类型；需要精确顺序时用当前版本的集成测试固定，不能把“路由函数已返回”当作清理已完成。测试替身也要实现相同释放契约，否则会掩盖泄漏。
 
-请求模型验证字段、范围和额外内容；响应模型定义对外结果，避免把内部对象的敏感或调试字段原样暴露。请求合法不代表用户有权读取资源，响应结构合法也不代表业务事实正确。
+### 2.4 应用级与请求级资源生命周期不同
 
-业务冲突、未知资源和非法输入需要项目一致的错误约定。未知内部故障应保留可追踪错误，不要全部改成200或全部指责为用户参数问题。
+共享 `AsyncClient` 在应用 lifespan 创建和关闭；请求身份、会话或流对象在请求范围使用。正常返回、异常和取消都要释放请求资源，一次请求不能关闭其他请求仍在使用的连接池。
 
-### 2.3 依赖注入提供协作对象
+同步路由可由框架安排在线程池；`async` 路由直接调用同步阻塞函数仍会占住事件循环。选择执行方式要看实际 I/O，不看函数名里有没有 `async`。同步路由中的全局可变状态仍可能竞争；`async` 路由必须显式 `await asyncio.to_thread(...)` 或改用异步客户端，不能把线程池当作无限资源。
+CORS 只约束浏览器跨域访问，TLS 只保护传输；它们都不回答“当前调用者能否操作这份订单”。可信身份应来自服务端认证上下文，对象授权不能依赖请求体自报 `tenant_id` 或 `role`。
 
-身份、仓储、数据库连接和模型客户端由依赖边界提供，路由无需到处读取环境、创建全局客户端。测试可以替换依赖，真实运行则采用已配置来源。请求资源与应用共享资源的生命周期不同，不能让一次请求关闭大家共用的池。
-
-#### 案例推进：请求级和应用级资源分别拥有
-
-应用lifespan适合创建与关闭共享HTTP客户端等资源，请求依赖适合提供当前身份或会话。用yield依赖表达退出清理，并验证失败路径。同步路由与异步路由的调度不同；框架不会把async路由内部任意阻塞调用自动变为非阻塞。
-
-接口测试经过路由、验证、依赖和响应映射。先测合法1990，再测字符串、bool、负数与额外字段，再用依赖替身测试身份与租户；真实认证与数据库集成另测。需要可靠后台任务时使用持久任务机制，进程内BackgroundTasks不自动提供崩溃后恢复。
-
-### 2.4 同步与异步路由如何安排
-
-async路由适合await异步I/O，普通同步阻塞调用仍会影响事件循环，需要明确执行边界。不要因函数签名含async就认定其中全部操作不阻塞。应用退出要关闭共享客户端，请求取消要释放本次资源。
-
-### 2.5 身份与资源访问是两道检查
-
-认证回答“当前调用者是谁”，授权回答“此人能否读取此文档或执行此动作”。可信身份来自服务端认证上下文，不是模型或请求体自报的role/tenant_id。资源查询、检索与工具服务都要保留这一边界。
-
-#### 案例推进：身份验证和授权是两步
-
-身份验证回答“你是谁”，授权回答“你能对这份资源做什么”。用受信任令牌或会话解析出的tenant_id，不能让请求体任意覆盖。路径里的项目ID也需要资源授权，不是只要登录便能访问全部项目。401/403/404等反馈按一致接口约定设计，同时避免泄漏敏感资源是否存在。
-
-CORS约束浏览器跨域访问方式，不是服务端身份验证，也不能阻止其他HTTP客户端直接请求。TLS保护传输，输入大小限制保护资源，字段验证保护数据形状，它们同样承担不同责任。
-
-### 2.6 用接口测试检查组合行为
-
-TestClient可在进程内请求应用，验证模型、路由、依赖与业务协作。先测试成功和错误数据，再测试未知用户、冲突和越权；最后手动启动服务核对实际运行配置与生命周期。
+认证回答“你是谁”，授权回答“你能对哪个对象做什么”。认证依赖可以校验令牌，但每个订单仍要按可信身份、资源归属和动作检查权限；无法建立可信身份通常返回 401，身份有效但权限不足返回 403。OpenAPI 声明 security scheme 只是文档，不会自动执行检查。
 
 ## 3. 原理讲解与推导
 
-### 3.1 路由是适配层，不是规则的第二个副本
+### 3.1 薄适配层让多个入口共享同一规则
 
-若CLI和API都重新计算金额，规则升级可能只改其中一个。把确定性计算放在共享业务函数，路由负责协议转换和请求上下文，让多入口遵守相同契约。
-
-### 3.2 生命周期决定资源能否安全共享
-
-共享连接池要在应用范围建立与关闭，请求事务或流对象在请求范围处理。取消、异常和正常返回都必须遵守相应责任，不能仅在理想路径close。
+CLI 和 API 各自解析输入，但都把规范化后的订单交给 `build_report`。路由复制金额算法会产生第二个规则来源，使一次状态变更只更新一个入口。统一业务函数后，接口测试才能验证真正会复用的计算，而不是另一套示例逻辑。
+授权也不能因此省略：模型合法只说明字段可进入业务，资源归属和动作权限仍由可信上下文决定。测试替身应保留真实授权规则，否则“通过”只证明 mock 按预期返回。
 
 ## 4. 示例与逐步走查
 
-### 最小请求模型与接口
+### 4.1 定义订单报告接口
 
-以下需要FastAPI、Pydantic 2，接口测试还需要HTTPX；这里只演示请求边界：
+#### 案例推进：严格输入只到达一次业务函数
+
+先声明依赖：`uv add "fastapi>=0.115,<1"`。把下面保存为 `order_service/main.py`。
 
 ```python
-from fastapi import FastAPI
+# framework-example: F15
+from typing import Literal
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-class Amount(BaseModel):
+from order_service.core import build_report, OrderConflict
+class OrderIn(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
-    cents: int = Field(ge=0)
-app = FastAPI()
-calls = []
-@app.post("/amounts")
-def inspect_amount(body: Amount):
-    calls.append(body.cents)
-    return {"cents": body.cents}
+    id: str = Field(min_length=1)
+    user: str = Field(min_length=1)
+    amount_cents: int = Field(ge=0)
+    status: Literal["paid", "pending", "cancelled"]
+class ReportIn(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    orders: list[OrderIn]
+class ReportOut(BaseModel):
+    input_count: int
+    order_count: int
+    paid_amount_cents: int
+def get_report_builder():
+    return build_report
 ```
 
-提交整数1正常，字符串"1"、True、负数、额外字段都应被校验拒绝。再将业务函数和身份依赖注入路由，避免路由逐渐承担全部规则。
+Pydantic 只负责输入形状；`id/user` 两端空白和同 ID 冲突仍由共享业务函数判断。依赖注入让测试可以记录调用次数，而不必替换金额计算。
 
-### 4.1 沿输入到结果逐步解释
+### 4.2 用 lifespan 管理共享客户端
 
-收到请求后，框架先按Amount验证字段和约束，合法对象才进入路由。路由把cents交给业务逻辑，再将结果按约定返回。坏字段不应先产生业务副作用，再被包装成错误响应。
+#### 案例推进：退出应用时关闭连接池
 
-输入模型不能回答当前身份能否操作这笔金额。两个请求即使正文相同，主体不同也可能获得不同授权结果；因此认证与对象权限位于可信服务端边界。
+在同一文件继续添加下面代码；`/external-report` 复用第14章适配器和同一报告函数。
 
-测试时分别让金额非法、身份未知和资源越权，检查失败发生在哪层以及业务函数是否执行。只测一个正常200，无法证明这些路径。
+```python
+from contextlib import asynccontextmanager
+import httpx
+from fastapi import Request
+from order_service.external import fetch_orders, UpstreamError
+@asynccontextmanager
+async def lifespan(app):
+    async with httpx.AsyncClient(base_url="https://orders.example.test", trust_env=False) as client:
+        app.state.http_client = client
+        yield
+app = FastAPI(lifespan=lifespan)
+@app.post("/reports", response_model=ReportOut)
+def create_report(body: ReportIn, builder=Depends(get_report_builder)):
+    try:
+        return builder([order.model_dump() for order in body.orders])
+    except OrderConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+def get_http_client(request: Request):
+    return request.state.http_client
+@app.get("/external-report", response_model=ReportOut)
+async def external_report(client=Depends(get_http_client)):
+    try:
+        return build_report(await fetch_orders(client, retries=1))
+    except (OrderConflict, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="上游订单数据不符合契约") from exc
+    except UpstreamError as exc:
+        raise HTTPException(status_code=502, detail="上游订单服务不可用") from exc
+```
+
+客户端只创建一次并跨请求复用；`async with` 保证应用退出时关闭。生产环境要把 base URL 放入配置，并在入口注入，而不是固定在代码里。
+
+### 4.3 用 TestClient 走完整接口路径
+
+#### 案例推进：分别验证成功、拒绝和清理
 
 ```python
 # framework-example: F15B
 from fastapi.testclient import TestClient
-
+calls = []
+def tracked_builder():
+    def builder(rows):
+        calls.append(1)
+        return build_report(rows)
+    return builder
+app.dependency_overrides[get_report_builder] = tracked_builder
 with TestClient(app) as client:
-    calls.clear()
-    ok = client.post("/amounts", json={"cents": 1})
+    shared = client.app.state.http_client
+    assert not shared.is_closed
+    body = {"orders": [
+        {"id": "A", "user": "Alice", "amount_cents": 1990, "status": "paid"},
+        {"id": "B", "user": "Bob", "amount_cents": 1000, "status": "pending"},
+        {"id": "A", "user": "Alice", "amount_cents": 1990, "status": "paid"}]}
+    ok = client.post("/reports", json=body)
     assert ok.status_code == 200
-    assert ok.json() == {"cents": 1}
+    assert ok.json() == {"input_count": 3, "order_count": 2, "paid_amount_cents": 1990}
     assert calls == [1]
-
     calls.clear()
-    for bad in (
-        {"cents": "1"},
-        {"cents": True},
-        {"cents": -1},
-        {"cents": 1, "tenant_id": "b"},
-    ):
-        assert client.post("/amounts", json=bad).status_code == 422
-    assert calls == []  # 验证失败时业务函数没有执行
+    for bad in ({"orders": [{"id": "A", "user": "Alice", "amount_cents": "1990", "status": "paid"}]},
+                {"orders": [{"id": "A", "user": "Alice", "amount_cents": True, "status": "paid"}]},
+                {"orders": [{"id": " ", "user": "Alice", "amount_cents": 1, "status": "paid"}]},
+                {"orders": [{"id": "A", "user": "Alice", "amount_cents": -1, "status": "paid"}]},
+                {"orders": [], "tenant_id": "b"}):
+        assert client.post("/reports", json=bad).status_code == 422
+    assert calls == []
+    conflict = client.post("/reports", json={"orders": [body["orders"][0],
+        {"id": "A", "user": "Alice", "amount_cents": 1991, "status": "paid"}]})
+    assert conflict.status_code == 409
+app.dependency_overrides.clear()
+assert shared.is_closed
 ```
 
-这里复用上面的 `app`；`with TestClient(app)`会经过真实路由、Pydantic验证和响应映射，并在进入/退出时触发应用 lifespan，因此可以测试中间件与生命周期（需要先真正配置它们），不是直接调用路由函数。它仍不验证真实网络、代理和部署环境，后者需要启动服务或集成环境。
+`TestClient` 经过真实路由、模型验证、依赖和响应映射，并触发 lifespan；它仍不验证真实网络、反向代理和部署配置。上游 502 分支应在 `tests/test_api.py` 中通过依赖替身覆盖。
+覆盖 502 时替换 `get_http_client`，让适配器抛出受控 `UpstreamError`，断言响应为 502 且正文不含内部异常。这样测试的是错误映射，不是 mock 掉订单报告计算。
 
-注意：TestClient 能测试的是“进程内配置的中间件/依赖/lifespan”，不是“生产环境的网络与部署”；这两类证据不能互相替代。
+接口证据还要区分层次：请求 `GET /openapi.json`，确认路径、请求体和 `ReportOut` 已声明，接入认证后再核验 security scheme；422 断言错误位置指向请求字段且业务未调用；409 必须来自形状合法但冲突的业务数据；502 来自受控上游失败且正文已脱敏。OpenAPI 能证明契约被声明，不能单独证明运行时授权或部署可用。
 
 ## 5. 动手练习
 
-### 本章累计任务：服务端建立可信边界
+### 本章累计任务：把同一订单业务接成服务
 
-把报告函数接到HTTP，验证正常输入、严格字段、未知身份与越权对象；被拒绝的请求不能先产生业务效果。
-
-**未通过时怎样定位：** 请求体合法不等于有权；前端隐藏字段不能代替服务端授权。先找到入口如何取得身份。
-
-**带到下一步：** 第16章把跨请求状态与批准放入持久化边界。
-
-下方专题练习用于补当前卡点；先完成这一项累计任务，不另将所有索引作为必须并行完成的进度。
-
-### 练习一：最小服务
-
-实现健康检查与订单报告入口。请求包含订单列表，响应包含输入数、去重数和整数分统计；复用第12章规则。手动启动后从/docs发一次正常请求，再用测试客户端经过真实路由验证。
-
-### 练习二：身份与字段边界
-
-身份依赖从受信任测试身份提供tenant-a。提交非法状态、bool金额、未知字段以及企图指定tenant-b的数据，按接口约定拒绝，业务副作用为零。区别没有身份、无权访问与资源不存在；响应不包含内部凭据或堆栈。
-
-### 练习三：生命周期与故障
-
-共享HTTP客户端由应用生命周期创建/关闭，用替身记录次数。模拟上游超时与服务关闭，确认入口反馈和资源释放。提交接口示例、测试及启动命令，注明身份方案在练习与真实部署中的差异。
+完成 `/reports` 与 `/external-report`，复用第12–14章函数。用 TestClient 覆盖 200、422、409、502，记录非法输入时业务未执行；用替身验证上游失败，并断言 lifespan 退出后共享客户端关闭。记录启动命令，并明确本练习的身份方案不能直接作为生产认证。
 
 ## 6. 验收与自测
 
-**行为验收：** 非法数据422、未知资源404、业务冲突409等按项目约定一致；请求之间不共享可变状态。
-
-**原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
+**验收命令：** 在项目根目录运行 `uv run --locked python -m pytest tests/test_api.py -q`；测试使用依赖替身，不访问真实订单服务。
 
 ### 6.1 先预测，再查看参考推导
 
-为什么CORS配置正确仍不能代替鉴权？共享HTTP客户端应由每个请求随意关闭吗？
+请求模型已经通过，为什么仍不能据此授权？每个请求可以随意关闭共享 HTTP 客户端吗？
 
 <details>
 <summary>完成预测后查看解释</summary>
 
-CORS主要是浏览器行为约束，其他客户端仍可发请求；授权必须由服务端执行。共享资源由其应用级所有者关闭，请求退出不应破坏其他请求仍在使用的客户端。
+模型只证明数据形状合法，身份与对象权限必须由服务端检查。共享客户端由应用级所有者关闭，请求退出不能破坏其他请求正在使用的连接池。
 
 </details>
 
 ## 7. 面试问答与迁移
 
-依赖注入如何便于测试？为什么不能在 async 路由直接放同步阻塞请求？
+**问：为什么不在路由里直接写金额统计？**
+答：CLI、API 和工具会需要同一规则。路由只做协议转换，统一业务函数才能让变更和测试覆盖所有入口。
 
-**参考回答：**
-
-1. 依赖注入让可信身份、数据库会话和外部客户端的取得与释放集中，测试可以替换相应边界。身份依赖回答“谁在访问”，业务授权仍要判断“能否访问这个对象”；替换身份后也必须运行真实授权规则，避免测试绕过待验证逻辑。
-2. async路由运行在事件循环上，直接调用同步阻塞客户端会占住循环。普通def路由或由框架调用的同步依赖可由框架安排在线程池中；async函数里直接调用的普通函数不会因此自动进线程池。选异步库或显式受限卸载，再测线程池排队与取消后的底层操作。
-
-**换条件自测：** 在一个路由加入慢同步调用，同时请求健康接口；修复前后比较健康请求延迟。再让模型超时，检查会话/客户端是否释放，以及用户收到的错误是否与无证据区分。
+**问：依赖注入和生命周期有什么关系？**
+答：依赖决定协作者从哪里来，生命周期决定它何时创建和释放。测试替换边界时也要保留真实清理规则，不能只替换成一个永远不关闭的对象。
 
 ## 8. 本章小结与参考
 
-### 8.1 一页知识地图
+- 请求模型先拒绝非法输入，业务冲突走独立错误路径。
+- 路由复用 `build_report` 与 `fetch_orders`，不复制订单规则。
+- 共享客户端由 lifespan 管理，TestClient 同时验证路由和清理。
+- 本章交付可测试订单 API，第16章把跨请求状态放入持久化边界。
 
-**本章主问题：** 把业务函数暴露成 HTTP 接口后，怎样保证数据形状、调用者身份和共享资源都不失控？
-
-**一条主线：**
-
-```text
-HTTP 请求 → 路由、请求模型、依赖与授权 → 受控响应与可测试服务
-```
-
-**三个关键词：** 契约、身份、生命周期——请求与响应模型定义数据契约，认证和授权确定谁能做什么，生命周期决定共享资源何时创建与关闭。
-
-**最容易错：**
-- 相信请求体里的 `tenant_id` 或 `role`；身份必须来自服务端认证上下文。
-- 请求模型校验通过就认为有权访问；认证与对象级授权是两道检查。
-- 在 `async` 路由里直接调用同步阻塞客户端，占住事件循环；`async` 不会自动把普通函数送进线程池。
-- 每个请求关闭共享客户端，或在路由里复制一套金额算法，让规则出现第二个副本。
-
-**与前后章：** 上一章建立可靠的出站调用；本章把同一业务规则作为入站接口暴露；下一章要求把跨请求状态、审批与幂等放进持久化边界。
-
-**学完应能：**
-- 用请求/响应模型与 `TestClient` 覆盖 200、422、404、409 和越权路径。
-- 用依赖注入提供身份与仓储，在测试中替换，不绕过真实授权规则。
-- 区分应用 lifespan 与请求级资源，验证失败路径也会释放。
-- 用一次慢同步调用说明阻塞路由怎样拖慢健康检查。
-
-### 8.2 日常工作注意事项
-
-- 不要直接相信请求体中的tenant_id或role；由服务端认证上下文确定身份，并在资源查询中使用。
-- 异步路由里检查实际库是否阻塞；数据库会话等按明确生命周期使用，不跨请求共享可变会话状态。
-- 客户端断开或上游失败时检查清理和错误响应；内部异常细节与完整业务正文不直接返回给用户。
-
-### 8.3 参考与后续学习
-
-本章把业务能力变为带身份与验证的接口。下一章处理跨请求保存的任务、审批与重复动作，防止重试产生重复效果。
-
-官方参考：[本章资料](https://fastapi.tiangolo.com/tutorial/)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
+参考：[FastAPI 依赖](https://fastapi.tiangolo.com/tutorial/dependencies/)、[FastAPI 生命周期事件](https://fastapi.tiangolo.com/advanced/events/)。
 
 [上一章](14-外部数据模型、HTTP与可靠调用.md) · [下一章](16-数据库、任务状态、幂等与审批.md)

@@ -1,121 +1,213 @@
 # 第12章　Python 综合项目与独立验收
 
 [上一章](11-异步、线程进程与性能边界.md) · [全书目录](教材目录.md) · [下一章](13-环境、分层、配置与工程交付.md)
-
 ## 1. 学习目标与前置知识
 
-整合语言机制，交付订单库与 CLI，再把同一规则用于工具执行器。前置：第 1–11 章。先完成文件到报告、打包与资源清理的独立验收即可进入工程服务；综合练习二的注册与执行部分可以在第24章前回做。
-
-**承接与本章主线：** 本章不增加一批新语法，而是用前面学过的容器、函数、模块、校验和测试，交付一个订单命令行工具。后面的HTTP服务继续调用这套订单规则。
-
-**本章从这里开始：** 前面每章都验证了一块能力，现在要把它们组合成一个可重复运行的订单程序。一条订单怎样从输入走到报告？这一章用契约把整条链路连接起来。
-
+前置：第1–11章。本章不引入新框架，只把订单规则、文件入口、异步查询和测试组装成一个可安装项目。
+**任务卡**
+- 接收：第7章的 `orders_core.py`、`report_cli.py`，第11章的 `queries.py` 和测试。
+- 只新增：`order-service/` 项目骨架、统一 `build_report`、`order-report` 入口与可编辑安装。
+- 交付：源码、固定 JSONL、测试、安装命令和一次正常/失败运行记录。
+- 验收：在独立虚拟环境可编辑安装；CLI 正常退出并生成报告，冲突或坏行非零退出且保留旧报告。
+**本章从这里开始：** 单文件示例都能运行，但换一个入口或输入就可能重复计金额、覆盖旧报告。现在用一条固定数据流把它们组合起来，并让另一个人按命令复现。
 ## 2. 基础知识讲解
+### 2.1 先固定订单契约
 
-组合程序时，沿一条订单追踪五件事：输入有没有被意外修改，处理步骤由哪些函数完成，读到坏数据时错误怎样传给调用者，文件是否关闭，同时处理的任务是否过多。后面的综合练习用同一条处理流程检查这些问题。
+每条订单只有 `id/user/amount_cents/status` 四个字段。`id/user` 去两端空白后必须非空；金额是非负整数且拒绝 `bool`；状态为 `paid/pending/cancelled`。同 ID 完全重复保留首条，同 ID 内容冲突则整批失败。
 
-### 2.1 先写出程序的完整契约
-
-各个小函数分别正确，不代表组合后的报告正确：如果先统计再去重，重复订单仍会进入金额；若先写文件后校验末行，失败也可能留下坏报告。因此综合项目先固定数据流和不变量，再接不同入口。每个组件都承担明确的输入、输出与失败责任，组合时检查责任之间有没有空隙。
-
-综合项目继续处理订单：数据包含ID、用户、整数分与状态，完全重复保留首条，同ID冲突报错，统计在校验和去重后进行。输入来自文件、SQLite或模拟HTTP，输出是结构稳定的报告。
-
-给每个入口说明错误与副作用：读取失败是否退出，输入是否修改，结果写到哪里，文件覆盖如何处理。没有这些约定，即使模块都能单独运行，组合后仍可能互相矛盾。
-
-#### 案例推进：从一条固定数据流开始
-
+报告固定为 `input_count/order_count/paid_amount_cents`。空输入返回三个 0；字段错误保留行号或字段名；冲突不能伪装成空报告。
+#### 案例推进：先规范化，再去重，最后汇总
 ```python
 # study-example: S12A
 def normalize(raw):
     result = []
     for row in raw:
-        cleaned = dict(row)
-        cleaned["id"] = row["id"].strip()
-        if not cleaned["id"] or type(row["amount_cents"]) is not int or row["amount_cents"] < 0:
+        clean = dict(row)
+        clean["id"] = row["id"].strip()
+        if not clean["id"] or type(row["amount_cents"]) is not int or row["amount_cents"] < 0:
             raise ValueError("非法订单")
-        result.append(cleaned)
+        result.append(clean)
     return result
-
 def unique(rows):
     by_id = {}
     for row in rows:
-        key = row["id"]
-        if key in by_id and by_id[key] != row:
-            raise ValueError(f"订单冲突:{key}")
-        if key not in by_id:
-            by_id[key] = row
+        if row["id"] in by_id and by_id[row["id"]] != row:
+            raise ValueError("订单冲突")
+        by_id.setdefault(row["id"], row)
     return list(by_id.values())
-
-def report(raw):
-    rows = unique(normalize(raw))
-    return {"input_count":len(raw), "order_count":len(rows),
-            "paid_amount_cents":sum(r["amount_cents"] for r in rows if r["status"] == "paid")}
-
-raw = [{"id":" A ","amount_cents":1990,"status":"paid"},
-       {"id":"A","amount_cents":1990,"status":"paid"}]
-assert report(raw) == {"input_count":2,"order_count":1,"paid_amount_cents":1990}
+raw = [{"id": " A ", "amount_cents": 1990, "status": "paid"},
+       {"id": "A", "amount_cents": 1990, "status": "paid"}]
+rows = unique(normalize(raw))
+assert len(rows) == 1 and sum(row["amount_cents"] for row in rows) == 1990
 assert raw[0]["id"] == " A "
 ```
 
-这是约定字段已存在的最小串联示例，完整项目还要检查顶层、额外字段、user、状态和错误位置。读代码时写出每层输出：先规范化两个A，再识别完全重复，最后才汇总1990；若先统计再去重，就会错误得到3980。
+这是最小数据流探针，完整项目还要检查字段集合、用户、状态和错误位置。先统计再去重会把 1990 错算成 3980。
+### 2.2 入口、业务和输出各负一项责任
 
-### 2.2 沿数据流拆分职责
+CLI 解析参数和文件，业务函数校验、去重、汇总，输出函数负责编码与原子替换。异步查询只返回原始订单，不自己计算金额。这样文件、查询和后面的 HTTP 入口可以复用同一规则。
 
-入口层解析命令和选择来源，适配器把外部格式转换为内部记录，校验层确保字段与业务单位，纯函数计算报告，展示层负责格式和输出。第一次实现可以只用少量文件；当同一变化不断影响多个位置时，再调整边界。
+资源责任也要明确：输入文件由 `with` 关闭；输出先写同目录临时文件，全部成功后再替换目标；失败时删除本次临时文件并保留旧报告。
+临时替换保证的是单机文件在一次成功发布时的完整性，不保证文件与数据库同时提交。若后续引入数据库，需要额外定义恢复与对账，不能沿用“换文件”作为分布式事务。
+### 2.3 可编辑安装与 wheel 是两种验收
 
-通过注入load/render等依赖，计算可在测试中使用固定数据，而真实入口仍使用文件或HTTP。不要让每个业务函数自己打开同一个文件、创建客户端或读取环境。
+本章使用 `pip/uv` 的可编辑安装，让新虚拟环境能找到 `order-report` 入口；它仍指向当前源码，适合开发。wheel 是独立安装产物，第13章再构建并放到非源码目录验证。两种证据不能互相替代。
+### 2.4 用需求—验收矩阵组织四类证据
 
-#### 案例推进：把来源和输出接到同一业务链
+先让每条需求都有可观察的验收条件，再选测试和命令；不要从“已经写了哪些测试”反推需求覆盖。
 
-读取函数提供原始对象，校验层提供可计算记录，报告函数只依赖内部契约；CLI决定错误输出与退出，API决定状态码，工具执行器决定结构化结果。相同规则只保留一份实现，三个入口各自转换边界。
-
-#### 一条订单数据的跨章轨迹
-
-用同一组订单：正常 A/Alice/1990/paid、B/Bob/1000/pending，字段错误 A/Alice/"29"/paid，业务冲突 A/Alice/1991/paid。每层都保存三份结果，格式可不同，但字段和三态必须一致：
-
-| 层 | 入口 | 正常 | 字段错误 | 业务冲突 |
+| 需求或契约 | 正常证据 | 边界证据 | 失败证据 | 副作用证据 |
 | --- | --- | --- | --- | --- |
-| 文件/CLI（第7、12章） | `orders.jsonl` | 报告成功，旧报告保留 | 行号 + ValueError，退出1 | 冲突列表，退出1 |
-| SQLite（第8章） | 同表多行 | 重开可查 | 约束/校验失败 | 唯一键或版本冲突 |
-| HTTP 客户端（第14章） | MockTransport | 200 + list | 200 但字段坏→validation | 409/冲突响应 |
-| FastAPI（第15章） | `POST /reports` | 200 + 报告 | 422 + 字段错误 | 409 + 冲突 |
+| 订单报告 | A 的 paid 金额为 1990 | 空文件、完全重复、两端空白 | 坏 JSON、同 ID 冲突非零退出 | 输入不变，旧报告不被失败覆盖 |
+| CLI 与安装 | 项目外目录能发现入口并退出 0 | 绝对路径、空白行、省略可选参数仍成功 | 缺输入、非法参数有明确错误 | 仅目标报告变化，临时文件被清理 |
+| 异步查询接入 | 多用户结果保持输入顺序 | 空列表、重复用户、达到并发上限 | 超时或下游失败可区分 | 无遗留任务，失败不产生半份报告 |
 
-先在同一份数据上固定三态预期，再分别换入口；如果某一层把字段错误伪装成空报告，或把冲突覆盖成正常，就说明它还复制了另一套规则。把三份输出存在 `.learning-labs/` 或学习记录中，后续变更时用同一组数据回归。
+“正常”证明主路径，“边界”证明输入极限，“失败”证明错误语义，“副作用”证明文件、网络、数据库或任务没有越权。四类证据互相不能替代：退出码为 0 不代表没有多写文件，业务断言通过也不代表安装入口可用。
 
-### 2.3 可选预演：把工具执行建立在已验证函数上
+变更先映射到契约，再决定测试范围：改字段规则要同步规范化、冲突判断、固定数据和全链测试；改 CLI 参数要覆盖解析与集成；改打包入口要在干净环境重新安装。未被触及的公共契约仍跑回归，不能只重跑离改动最近的一个函数。
 
-工具注册表保存名称、参数模型和处理器；执行器先查找并校验，再调用并记录结果。同步/异步处理要有清楚边界，超时、取消、未知工具和业务异常不能统一伪装成成功。
+独立实现先用矩阵和失败样例约束行为，再对照参考代码解释差异；照抄参考不算独立完成。行为相同可以保留不同实现，参考暴露遗漏时则修改实现或测试并记录理由，而不是为了对齐而删除反例。
 
-这一步先由代码直接调用，不必提前引入模型。只有执行器自身可验证，后续Agent选择工具时的错误才容易与业务执行错误区分。
+安装验收至少从项目外的空工作目录执行入口。可编辑安装仍使用源码，不能据此证明 wheel 自包含；第13章用 `dist` 产物重复验收。输入、输出和解释器均用绝对路径，避免验证的是当前目录恰好提供的导入或文件。
+## 3. 原理讲解与推导
+### 3.1 正确汇总来自不可交换的处理顺序
 
-### 2.4 交付不只是源码
+字段规范化决定哪些记录算重复；去重决定金额出现几次；汇总只消费已去重记录。若交换顺序，局部函数仍可能正确，整条链却重复计数。因此每一层都要写明前置条件与输出契约，组合测试使用同一份固定数据贯穿全链。
+## 4. 示例与逐步走查
+### 4.1 写统一业务函数
+#### 案例推进：从原始行生成报告
 
-本章先完成可运行源码、固定数据、测试与复现命令；这里给出后续交付目标。第13章再实际构建wheel、安装到独立环境并验证入口。两步验收分开记录。
+把下面保存为 `src/order_service/core.py`。它接收可迭代的原始字典，因此文件加载器和异步查询都能接入。
+```python
+# book-example: B12
+FIELDS = {"id", "user", "amount_cents", "status"}
+STATUSES = {"paid", "pending", "cancelled"}
+class OrderConflict(ValueError):
+    pass
+def normalize(row):
+    if not isinstance(row, dict) or set(row) != FIELDS:
+        raise ValueError("订单字段必须恰好是 id/user/amount_cents/status")
+    for field in ("id", "user"):
+        if not isinstance(row[field], str) or not row[field].strip():
+            raise ValueError(f"{field} 必须是非空文本")
+    if type(row["amount_cents"]) is not int or row["amount_cents"] < 0:
+        raise ValueError("amount_cents 必须是非负整数分")
+    if not isinstance(row["status"], str) or row["status"] not in STATUSES:
+        raise ValueError("非法订单状态")
+    return {"id": row["id"].strip(), "user": row["user"].strip(),
+            "amount_cents": row["amount_cents"], "status": row["status"]}
+def build_report(raw_rows):
+    by_id, input_count = {}, 0
+    for line_number, raw in enumerate(raw_rows, 1):
+        input_count += 1
+        try:
+            row = normalize(raw)
+        except ValueError as exc:
+            raise ValueError(f"第{line_number}条: {exc}") from exc
+        if row["id"] in by_id and by_id[row["id"]] != row:
+            raise OrderConflict(f"第{line_number}条: 订单冲突:{row['id']}")
+        by_id.setdefault(row["id"], row)
+    return {"input_count": input_count, "order_count": len(by_id),
+            "paid_amount_cents": sum(row["amount_cents"] for row in by_id.values()
+                                     if row["status"] == "paid")}
+```
+### 4.2 接文件入口并声明安装信息
+#### 案例推进：失败时保留旧报告
 
-准备固定数据、正常/失败命令、测试、依赖锁、安装包和README。在临时环境中复现，检查是否依赖本地路径和隐藏配置；把仍未验证的平台、服务和性能条件明确记录。
+保存为 `src/order_service/cli.py`；空 JSONL 行跳过，坏行带行号报错。
+```python
+import argparse
+import json
+from pathlib import Path
+import sys
+from tempfile import NamedTemporaryFile
+from .core import build_report
+def load_orders(path):
+    with open(path, encoding="utf-8") as stream:
+        for line_number, text in enumerate(stream, 1):
+            if not text.strip():
+                continue
+            try:
+                yield json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"第{line_number}行不是合法JSON") from exc
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="生成订单报告")
+    parser.add_argument("input")
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = build_report(load_orders(args.input))
+        payload = json.dumps(result, ensure_ascii=False)
+        target = Path(args.output)
+        temporary = None
+        try:
+            with NamedTemporaryFile("w", encoding="utf-8", dir=target.parent,
+                                    prefix=f".{target.name}.", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(payload)
+            temporary.replace(target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    except (OSError, ValueError) as exc:
+        print(f"失败:{exc}", file=sys.stderr)
+        return 1
+    print(payload)
+    return 0
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
 
-最后修改一条规则，例如新增一种合法状态，检查模型、校验、计算、展示和测试哪些地方受到影响。能做这种传播分析，才说明知识已组合成工程能力。
+项目骨架与 `pyproject.toml` 如下；`src/order_service/__init__.py` 留空即可。
+```toml
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
 
-#### 案例推进：一次变更检查知识是否组合起来
+[project]
+name = "order-service"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
 
-新增一种状态时，先确认校验接受它，再决定是否进入paid统计，随后更新输出模型和测试。若所有改动都发生在任意入口的复制代码中，说明规则还没有集中。最后从独立环境安装并运行，证明交付不依赖个人目录。
+[project.scripts]
+order-report = "order_service.cli:main"
 
-### 2.5 可选整理：让消息分派更清楚
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+```
+### 4.3 用固定数据完成安装验收
+#### 案例推进：先正常，再把最后一条改成冲突
 
-现在已有函数、类型和错误处理基础，可在综合项目中比较if与结构匹配；不要求先掌握它才能完成前面的函数章节。
+`data/orders.jsonl` 放三条记录：A/Alice/1990/paid、B/Bob/1000/pending、与 A 完全相同的一条。先在项目根确定绝对路径，再切到项目外新建的空目录执行；输入、输出和解释器都不依赖当前源码目录。
 
-#### 结构化匹配和赋值表达式
+```powershell
+$project = (Resolve-Path ".").Path
+$work = Join-Path $env:TEMP ("order-report-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory $work | Out-Null
+uv venv "$work/.venv"
+uv pip install --python "$work/.venv/Scripts/python.exe" -e $project
+Push-Location $work
+try {
+    & "$work/.venv/Scripts/order-report.exe" (Join-Path $project "data/orders.jsonl") --output (Join-Path $work "report.json")
+} finally {
+    Pop-Location
+}
+```
 
-match按照结构依次匹配，适合分派不同消息。先理解字面量、字典键和捕获名称，再使用guard约束条件。
+正常报告应为 `{"input_count": 3, "order_count": 2, "paid_amount_cents": 1990}`。把第三条 A 的金额改为 1991，再运行同一命令：应非零退出，stderr 含冲突，`report.json` 仍是上一次成功内容。这里验证的是可编辑安装，不是 wheel 内容完整性。
+空文件应得到三个 0；空白行不计入 `input_count`，但合法 JSON 的每一行都计入。损坏末行发生在报告计算和替换之前，因此旧报告与输入文件都不会被本次失败改写。
+### 4.4 选读：模式匹配与海象表达式
+
+订单项目不需要这两种语法。理解 `match` 后，可以用它重写按类型分支的入口；下面保留原 `S04G` 实验，它不改变前面的数据流。
 
 ```python
 # study-example: S04G
-payload = {"type":"query", "limit":3}
+payload = {"type": "query", "limit": 3}
 match payload:
-    case {"type":"query", "limit":limit} if type(limit) is int and limit > 0:
+    case {"type": "query", "limit": limit} if type(limit) is int and limit > 0:
         action = "查询"
-    case {"type":"final", "content":str(content)}:
-        action = "结束"
     case _:
         action = "拒绝"
 assert action == "查询"
@@ -124,153 +216,33 @@ if (name := raw.strip()):
     assert name == "Alice"
 ```
 
-limit是捕获名称，不是与某个已有变量比较；字典模式默认可忽略额外键，因此不能代替完整Schema校验。guard在结构匹配后判断，失败继续后续case。不要依赖失败匹配后的捕获状态。`:=`在表达式中同时绑定并产生值，适合避免清楚场景中的重复计算；普通赋值更易读时保留普通写法。
-
-## 3. 原理讲解与推导
-
-### 3.1 组合需要一致的前置和后置条件
-
-某个函数输出“金额单位为分”的记录，下游必须按相同单位解释；某层允许重复而下层假定已去重，则必须在边界完成转换。完整链路的正确性建立在这些契约衔接上，而非每个函数单独看似合理。
-
-### 3.2 可替换依赖让错误更可控
-
-用相同契约替换来源，可以分别验证计算和I/O；业务函数不依赖具体网络对象后，测试和变更影响更容易收窄。层次不是越多越好，而是每层承担可说明的变化。
-
-## 4. 示例与逐步走查
-
-```python
-# book-example: B12
-def run_report(load, render):
-    rows = load()
-    result = {"count": len(rows), "total_cents": sum(row["amount_cents"] for row in rows)}
-    render(result)
-    return result
-outputs = []
-result = run_report(lambda: [{"amount_cents":7},{"amount_cents":3}], outputs.append)
-assert result == {"count":2,"total_cents":10} and outputs == [result]
-```
-
-### 4.1 沿输入到结果逐步解释
-
-run_report先调用load取得记录，再计算数量与整数分合计，最后把完整结果交给render。load和render是能力参数，业务计算不需要知道文件路径或HTTP响应结构。
-
-如果render只把结果追加到测试列表，就能观察生成的报告而不写真实文件；这替换的是输出边界，求和仍由真实代码执行。若把计算也替换成固定答案，检查便无法发现求和错误。
-
-组合还需要明确前置：传入记录应已校验和去重。若把未去重记录直接交给此处求和，局部加法没有错，系统结果仍会错；要从数据流顺序修复。
-
 ## 5. 动手练习
-
 ### 本章累计任务：独立交付订单程序
 
-从新输入文件生成报告，验空输入、重复、冲突和损坏末行；在非源码目录使用安装产物运行。再增加一种退款状态并说明金额符号与汇总规则。
-
-**未通过时怎样定位：** 文件能读不等于记录合法，局部求和正确不等于去重顺序正确；先追踪数据流，再修改首个分叉。
-
-**带到下一步：** 第13章固定环境与依赖，随后让其他客户端使用这个程序。
-
-下方专题练习用于补当前卡点；先完成这一项累计任务，不另将所有索引作为必须并行完成的进度。
-
-本章主线先交付订单程序。工具注册与消息分派可保留到第24章前回做，不以Agent准备项阻塞基础程序交付。
-
-### 综合练习一：同一订单契约，不同入口
-
-先用文件与SQLite两种来源，均产生id/user/amount_cents/status四个字段。有效状态为paid、pending、cancelled；金额为非负整数且拒绝bool；规范化id/user两端空白后检查非空。同ID完全一致保留首条，不一致报错，保留首次顺序。
-
-固定输入：A/Alice/1990/paid，B/Bob/1000/pending，以及一条与A完全相同的记录。应有input_count=3、order_count=2、paid_amount_cents=1990；改最后一条A为1991，应失败且输入与已保存报告不被意外改写。模拟HTTP来源在第14章补入。
-
-### 综合练习二：CLI与工具复用真实计算
-
-CLI接受输入和输出路径，正常结果可解析，错误写stderr并非零退出。给同一报告函数注册一个只读工具，未知名称或非法参数不执行真实函数。同步与异步工具要有明确调用契约，不把协程对象当作最终结果。
-
-验收：CLI、库函数与工具对相同数据得到相同业务结果；工具记录可以证明实际执行次数和错误状态；空输入有零统计。
-
-### 综合练习三：变更与独立交付
-
-为项目构建安装包，在临时环境、非源码目录完成文件到报告。然后新增一种状态或一项筛选规则，列出模型、校验、统计和测试的影响，完成修改并保留回归。提交代码、数据、安装运行命令、测试结果和仍未支持的条件。
-
-### 综合练习四：当订单放不进内存
-
-现在财务把输入换成逐行 JSON，要求第十万行遇到同 ID 不同金额时指出行号，并保留上一次成功报告。先画出“文件 → 有效行 → 去重状态 → 汇总 → 输出”的所有者。文件由哪个上下文关闭？生成器能节省哪份列表？为检测最后一行与第一行的冲突，又必须记住什么？
-
-1. 做一个只读一遍的行迭代器，逐行解码并保留行号。先用三行输入手推：第一条为 A，第二条完全重复，第三条金额不同。写测试验证第三行失败，同时检验前两行没有改变输入或覆盖旧报告。
-2. 对少量唯一 ID 重复多次、每行均为新 ID 两种数据分别用同一实现。字典按 ID 保留首条，有 U 个唯一键时空间随 U 增长。把输入换成生成器只省去原始行列表。预先写下哪组占用更大，再用 `tracemalloc` 分别测量同规模输入的峰值；在测量区间内逐行生成数据，避免把构造测试列表的开销误算给处理器。
-3. 当去重状态也放不进内存，把首条记录放进 SQLite。主键负责区分首次出现与已存在；发生碰撞时比较规范化后的全部业务字段。仅用 `INSERT OR IGNORE` 会吞掉同 ID 不同金额的错误。若输出要求保持首次顺序，存首见行号，读回时显式排序。
-4. 在报告成功计算后才发布结果。向输出文件同目录的临时文件写入完整内容，关闭后替换目标；解析或写入失败时清理本次临时文件。先放一个有效报告，再用最后一行损坏的输入验证旧内容仍可读。写出该方法对单机文件保证了什么，并说明数据库与文件同时提交需要额外的恢复设计。
-
-交付时从项目外的工作目录，用干净环境安装自己构建的 wheel，调用你实现的 CLI，记录退出码、标准错误和输出文件。让同伴只拿输入和安装说明复现一次。按失败位置回读：[对象与容器](03-容器、推导式与数据转换.md)、[迭代与资源](05-迭代、生成器、异常与资源管理.md)、[文件与 CLI](07-模块、文件、序列化与命令行.md)、[测试与项目工具](10-测试、调试、日志与项目工具.md)。后面的文档导入沿用同样的资源与失败边界。
-
-### 累计交付：可交付订单程序
-
-当前任务：从文件到结果的源码主路径可复现，接口、单位与错误一致；独立安装在下一章完成。
-
-继续之前：带着源码、依赖和行为基线进入第13–17章；工具注册及模式匹配是按需回看的扩展。
-
+把第7章入口整理为上述项目，并把第11章查询返回的原始订单交给 `build_report`。测试空输入、完全重复、同 ID 冲突和损坏末行；完成可编辑安装后记录正常与失败命令、退出码和报告内容。不要新增 HTTP 或数据库。
 ## 6. 验收与自测
-
-**行为验收：** 通过[语言阶段G1/G2/G3关卡](附录B-语言练习任务索引.md)；独立重写四个关键函数；构建包可运行；说明失败恢复和仍有的限制。
-
-**原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
-
+**验收产物：** 新虚拟环境中的 `order-report` 入口，以及正常/冲突两次运行记录；冲突运行不得改写旧 `report.json`。
 ### 6.1 先预测，再查看参考推导
 
-为什么去重和统计交换顺序会出错？“所有函数都各自通过测试”是否足以证明组合正确？
-
+为什么单元测试都通过，仍要跑一次“文件→校验→去重→汇总→替换输出”的完整链路？
 <details>
 <summary>完成预测后查看解释</summary>
 
-重复记录会在去重前被多次计入。组合还需要前后条件一致，例如单位、规范化、顺序与已去重状态；单元检查之外必须验证固定数据的完整链路。
+组合错误常发生在契约衔接处，例如单位不一致、先去重后统计或失败后覆盖输出。完整链路用固定数据检查这些前后条件，也能发现入口和资源管理问题。
 
 </details>
-
 ## 7. 面试问答与迁移
-
-如何证明自己会 Python 而不只是会框架？你最近一次需求变更影响了哪些测试？
-
-**参考回答：**
-
-1. 用一条能独立完成的路径证明：读取陌生订单→校验→处理重复与冲突→整数分汇总→写出→错误退出。再解释两个名称为何共享状态、生成器何时关闭文件、失败为何不留下半份报告。能定位新输入下的错误，比列举框架名称更能证明语言掌握程度。
-2. 例如新增退款，先问退款是新记录、状态变化还是负金额，不能直接放开金额校验。若既有契约只接受非负金额，先定义退款标识、关联与汇总规则，再列出模型、去重、聚合、输出和测试的变更。保留原始订单回归，并补部分退款、重复退款与冲突记录。
-
-**换条件自测：** 不查看原实现，新增一种拒绝规则并展示“旧行为保持、新规则生效”。记录真正改动的位置；未做过的需求变更不要写成个人项目经历。
-
+**问：怎样说明项目不是只会跑示例？**
+答：换一份未见输入，从安装入口运行到报告，再制造冲突和坏行；解释首次失败位置、退出码和旧报告为何保留。证据要覆盖正常与失败路径。
+**问：为什么本章不用 wheel 验收？**
+答：可编辑安装验证入口、依赖声明和开发环境能否找到项目；wheel 还要验证打包内容与源码解耦。第13章在干净环境完成后者，避免两种失败混在一起。
 ## 8. 本章小结与参考
 
-### 8.1 一页知识地图
+- 统一契约：严格字段、规范化、去重、整数分汇总。
+- 统一数据流：所有入口把原始订单交给同一个 `build_report`。
+- 明确资源责任：失败不覆盖旧报告，临时文件必须清理。
+- 本章交付可编辑安装的订单项目，第13章增加可复现环境与 wheel。
 
-**本章主问题：** 一组函数各自正确，怎样组合成从订单输入到报告输出、又能被他人独立复现的链路？
-
-**一条主线：**
-
-```text
-固定数据流与不变量 → 入口、校验、计算与发布 → 可复现的订单报告
-```
-
-**三个关键词：** 契约、组合、验收——契约约束每层输入输出，组合检查责任间的空隙，验收用陌生输入证明整条链成立。
-
-**最容易错：**
-- 单函数测试通过即认为组合正确；先统计再去重会重复计金额，先写文件后校验末行会留坏报告。
-- 用空报告或 `[]` 掩盖字段错误与同 ID 冲突，调用方分不清“没有数据”和“数据坏了”。
-- 源码目录跑通就当作交付；换目录、独立安装才暴露路径与漏包。
-- 新增状态只改一个入口，规则复制在多处后行为不一致。
-
-**与前后章：** 上一章提供异步、线程与有界任务；本章与文件、校验、CLI 组装成订单程序；下一章要求源码可复现安装并配置。
-
-**学完应能：**
-- 画出“文件→有效行→去重状态→汇总→输出”的数据流与资源所有者。
-- 让文件与 SQLite 共用同一报告规则，正常、字段错误、同 ID 冲突三态一致。
-- 用固定数据与未见输入完成验收，记录退出码、标准错误与输出文件。
-- 分析规则变更对模型、校验、统计与测试的影响，选读语法按需引入。
-
-### 8.2 日常工作注意事项
-
-- 同ID冲突不能被覆盖或按重复静默删除；先校验并保留必要原始信息，再汇总。
-- 坏行出现在文件末尾时也应有明确结果，报告发布前确认整批处理是否成功。
-- 验收要从新的目录或环境运行，并换一批未见数据；示例通过不能直接代表自己的实现也通过。
-
-### 8.3 参考与后续学习
-
-本章是语言阶段的汇合点。通过验收后进入工程卷，把同一业务能力交付为可复现项目、可靠客户端与HTTP服务。
-
-官方参考：[本章资料](https://docs.python.org/zh-cn/3.12/tutorial/)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
+参考：[Python 打包](https://packaging.python.org/en/latest/tutorials/packaging-projects/)、[uv 项目](https://docs.astral.sh/uv/guides/projects/)。
 
 [上一章](11-异步、线程进程与性能边界.md) · [下一章](13-环境、分层、配置与工程交付.md)

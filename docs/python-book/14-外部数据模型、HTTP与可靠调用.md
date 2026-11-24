@@ -4,230 +4,215 @@
 
 ## 1. 学习目标与前置知识
 
-能检查外部接口的参数和响应，安排HTTP客户端的创建与关闭，并区分哪些失败可以重试、哪些应直接报告。前置：第9、11、13章。
+前置：第9、11、13章。要能把外部响应转换为内部订单，并说明一次失败发生在哪一层。
 
-**承接与本章主线：** 前面的程序主要处理自己能控制的数据，现在开始调用可能超时、断开或返回坏数据的外部服务。我们按顺序检查响应、限制等待时间并决定是否重试，再把这些做法用于API服务和模型调用。
+**任务卡**
+- 接收：第13章已锁定的 `order-service` 项目与统一 `build_report`。
+- 只新增：HTTPX 异步客户端、响应适配器、错误分类和离线测试。
+- 交付：`order_service/external.py` 与 `tests/test_external.py`。
+- 验收：合法列表进入同一报告函数；500、超时、坏 JSON 和错误结构分别得到可区分错误，客户端全部关闭。
 
-**本章从这里开始：** 调用外部订单服务，收到200却发现返回的是错误网页。网络、HTTP状态、JSON和业务数据是四道边界，本章沿一条请求依次检查。
+**本章从这里开始：** 外部订单服务返回 200，内容却可能是错误网页。连接、HTTP 状态、JSON 和业务结构是不同边界；先判断第一道失败边界，才能决定是否重试。
 
 ## 2. 基础知识讲解
 
-### 2.1 从HTTP请求与响应理解客户端
+### 2.1 从方法、状态、头和体理解一次 HTTP 交换
 
-调用远端订单接口时，收到字节不等于得到订单。连接可能中断，服务可能返回错误页，合法JSON也可能包含错误字段。它们发生在不同阶段，修复方式也不同。因此客户端按连接、HTTP、解析和业务结构逐层检查，只有跨过这些边界，计算函数才接收内部数据。
+请求行包含方法、目标与 HTTP 版本；头部承载 `Content-Type`、`Accept`、认证、缓存和幂等键等元数据，体承载载荷。GET 通常只取表示且不应有业务写副作用；POST 常用于创建或触发动作，PUT 按协议语义应幂等而 PATCH 不保证；实现仍要核对实际契约，DELETE 也不能只凭方法名假定重复调用无副作用。
 
-先手工描述一次查询：客户端向某个URL发出GET，请求头携带约定的身份信息；服务端返回状态码和响应内容。状态成功后，客户端还要按约定解析内容。由这条来回过程再认识方法、参数、请求体和响应头。GET通常用于读取，POST常用于提交；能否重试还要看接口是否会产生额外业务效果。
+响应同样由状态行、头部和体组成。2xx 表示这一层成功，3xx 需要按重定向策略处理，4xx 通常要改请求或身份，5xx 表示服务端失败；429 表示限流。200 只说明 HTTP 交换成功，不证明 JSON、订单结构或业务金额正确。`Content-Type` 是解析线索而非信任凭证，仍要限制大小并验证结构。
 
-HTTPX的Client/AsyncClient管理可复用连接；调用方应明确何时创建、共享和关闭。每次临时创建客户端虽然直观，却可能失去连接复用并增加资源管理成本。
+3xx 不是最终业务响应：HTTPX 默认不自动跟随重定向，客户端要显式决定是否跟随；跨主机跳转还要重新检查 Authorization 是否会泄露，以及 POST 是否被改成 GET。重定向次数也计入总预算。
 
-#### 案例推进：看懂请求由什么组成
+### 2.2 一次响应要穿过四层检查
 
-请求包含方法、URL、查询参数、头和可选请求体；响应包含状态、头和内容。GET通常读取资源，POST常提交数据，PUT/PATCH/DELETE有各自协议语义，但最终副作用仍由服务契约决定。Content-Type说明格式，Authorization承载认证信息，两者都不是业务数据本身。
+传输层可能超时或断开；HTTP 层可能返回 500；解析层可能不是合法 JSON；结构层可能返回对象而非订单列表。任何一层失败都不能统一变成 `[]`，因为“没有订单”和“服务坏了”必须可区分。
 
-### 2.2 分四层检查返回结果
+状态成功后仍要检查结构，结构正确后再交给第12章 `build_report` 做字段与业务校验。这样外部适配器不复制金额、状态和去重规则。
 
-第一层是连接或超时，可能根本没有完整响应；第二层是HTTP状态，500不应继续当作正常订单；第三层解析JSON，文本可能不是合法JSON；第四层业务模型，列表元素仍可能缺字段或金额不合法。
+外部 DTO 只描述 wire 契约：缺失字段与显式 `null`、未知字段、枚举值、金额单位和时间格式都要分别定义。适配器再把 DTO 转成内部订单；不要直接拿内部严格模型充当所有上游版本的模型，否则契约升级会同时破坏解析和业务。响应大小也应在读取前设上限。
 
-按顺序检查这些边界，错误保留可区分类型。不要在任意失败后统一返回[]，因为调用方无法区分“没有数据”和“服务坏了”。
+### 2.3 超时、重试和总预算不是一回事
 
-#### 案例推进：用MockTransport保留真实客户端逻辑
+HTTPX 通常提供 connect/read/write/pool 四类时限：分别约束建连、等下一块数据、写请求和等连接池名额；单次调用超时也不等于整个任务截止时间。重试只用于约定的临时故障，并受次数和剩余总预算限制。
+读取超时通常限制等待下一块数据的时间，慢速响应可能每块都未超时却总时长很久。调用方应从任务开始计算 deadline，并把排队、重试和退避都计入；不能每重试一次就重新发放完整预算。
 
-以下需要HTTPX，安装并锁定该阶段依赖后运行；MockTransport避免真实网络，但状态检查与JSON解析真实执行。
+GET 通常可安全重放，但服务契约仍要确认；写操作超时后远端可能已经成功，必须用幂等键、状态查询或对账，不能直接重复提交。
 
-```python
-# framework-example: F14
-import httpx
-def handler(request):
-    assert request.url.path == "/orders"
-    return httpx.Response(200, json=[{"id":"A","amount_cents":10}])
+可重试集合通常包括 408、429 和部分 5xx，例如 502/503/504；501/505 等多半不是临时容量问题。解析失败、结构错误和普通 4xx 不应盲目重试。遇到 `Retry-After` 的秒数或 HTTP 日期，先换算并受总 deadline 限制；无该头时用指数退避加全抖动，例如 `random.uniform(0, min(cap, base * 2**attempt))`，避免多个客户端同时重试。`retries` 表示额外重试次数，总尝试次数为 `retries + 1`；重试写操作还必须复用同一幂等键和载荷。下面的教学适配器只处理超时和 500/502/503/504，408/429 与 `Retry-After` 留给生产策略显式实现。
 
-with httpx.Client(base_url="https://example.test", transport=httpx.MockTransport(handler)) as client:
-    response = client.get("/orders", params={"status":"paid"})
-    response.raise_for_status()
-    rows = response.json()
-    if not isinstance(rows, list):
-        raise ValueError("订单响应必须为列表")
-    assert rows[0]["amount_cents"] == 10
-```
+### 2.4 客户端由明确的所有者创建和关闭
 
-把响应分别改成500、非JSON文本和结构错误对象，观察失败分别在哪层。MockTransport不验证真实DNS、TLS、代理或服务可用性，这些要由对应集成检查补充。HTTP成功也不证明每条订单已满足领域规则。
+`AsyncClient` 复用连接池，适合覆盖一组调用。它应在应用或适配器边界创建、注入并关闭；测试用 `MockTransport` 固定响应和异常，避免真实网络。替身证明客户端逻辑，不证明真实 DNS、TLS、认证或服务可用性。
+日志记录状态类别、尝试次数和请求标识即可，不记录 Authorization、完整响应正文或用户敏感字段。错误消息可以说明失败层，但不能把内部堆栈和凭据直接交给调用方。
 
-#### 最小输入—首个失败层对照
+`client.get()` 默认读取完整响应并释放连接；使用 `client.stream()` 或手动消费响应流时，必须用 `async with` 或在 `finally` 中 `await response.aclose()`，否则连接可能无法回池。关闭响应不等于关闭共享客户端；池容量限制连接数，pool timeout 限制等名额的时间，二者都不限制上游业务并发。
 
-| 输入 | 首个失败层 | 调用方应看到 |
-| --- | --- | --- |
-| 连接/读取超时 | 传输 | 可重试的 timeout，不进入 JSON 解析 |
-| 500 + HTML | HTTP 状态 | upstream_error，不能先报 JSON 错 |
-| 200 + 非 JSON 文本 | 解析 | parse_error，保留截断内容 |
-| 200 + JSON 对象而非列表 | 结构 | schema_error，说明期望 list |
-| 200 + 列表元素金额 `"10"` 或 `true` | 字段/业务 | validation_error，定位到字段 |
-| 200 + 合法列表 | — | 进入金额汇总 |
-
-逐项只改 handler 的一个变量，先写下预期失败层再运行；不要一次改三处，否则无法归因。最后把同一组输入交给适配器，要求它返回可区分的错误类别，而不是统一 `[]`。
-
-### 2.3 让模型约束贴合外部契约
-
-用Pydantic BaseModel声明字段、范围、状态、缺失和额外字段规则。严格模式用于拒绝本不允许的隐式转换，转换模式用于有明确兼容需求的输入；不能依赖默认行为猜测金额字符串是否会通过。
-
-模型验证后，再转换到内部订单或领域对象。接口Schema不应承担授权和事实证明，业务函数也不应到处解析原始HTTP Response。
-
-### 2.4 设置超时、总预算与重试
-
-连接、读取、写入、连接池等待等时限约束不同阶段，业务总任务还需要截止时间。重试仅在错误可恢复、操作可安全重放且剩余预算足够时进行；退避与抖动减少同时重试放大的负载。
-
-调用写接口超时，服务端可能已完成动作。此时应依赖幂等键或结果查询，而非假设没有发生。缓存同样需要覆盖身份、数据版本和影响结果的参数。
-
-#### 案例推进：为什么超时不是一个数字就够
-
-连接、读取、写入和连接池等待可能分别受限；读取超时通常针对等待下一块数据的时长，不自动等于整个响应的总时长。单次调用预算还要受整个任务deadline约束。若每层各自允许5秒并各重试三次，用户可能等远超5秒。重试前检查错误类别、动作可重复性、剩余时间与最大次数，退避和抖动只负责安排下一次时机。
-
-客户端生命周期应覆盖适当的一组调用，以复用连接池，最后由所有者关闭。异步代码使用AsyncClient并await；不能把同步网络调用塞进async函数后便认为它不阻塞。
-
-#### 案例推进：把写入超时与查询超时分开
-
-查询失败通常不会改变远端业务状态；提交报告超时则可能发生在远端成功之后。此时先记待确认，通过稳定动作键查询或对账。重试是否安全不能只看状态码，还要看动作语义以及服务端真正提供的幂等保证。
-
-### 2.5 用受控替身复现边界
-
-MockTransport让测试固定响应与异常，避免依赖外部服务长期可用。成功、500、坏JSON、结构错误和ReadTimeout分别测试，再少量验证真实服务的认证、网络和协议。替身证明的是客户端逻辑，不是外部服务始终正确。
+连接池不是越大越好：限流、重试和池容量要一起设计，否则重试会放大拥塞。关闭客户端前先停止接收新请求并等待在途请求结束，否则会把它们一起中断。
 
 ## 3. 原理讲解与推导
 
-### 3.1 协议成功不等于业务成功
+### 3.1 检查顺序决定首个失败原因
 
-TCP/HTTP/JSON/业务Schema各层依次缩小不确定性。200且可解析仍可能是错误业务对象，校验通过仍可能引用错误版本。逐层保留信息，才能定位实际失败点。
-
-### 3.2 重试改变的是执行次数
-
-重试不仅影响时间，还可能重复业务效果和增加上游负载。把单次时限、次数上限、总预算与操作幂等性一起设计，不用一个for循环替代可靠性策略。
+如果先对 500 的 HTML 调用 `json()`，就会把服务故障误报成解析故障。先检查传输与状态，再解析和检查结构，错误才能保留可定位的原因；错误类别又决定能否重试。可靠调用不是“多重试几次”，而是先正确分类，再在总预算内执行有限次数。
+分类错误还要保留给调用方：传输失败可进入临时故障策略，4xx 通常先修正请求或权限，结构和字段错误应修复契约。不能把所有异常都包装成“网络不好”。
 
 ## 4. 示例与逐步走查
 
-### HTTPX离线边界示例
+### 4.1 写受预算约束的异步适配器
 
-以下片段需要本章的HTTPX依赖，演示固定响应而不发外网请求：
+#### 案例推进：只重试临时读取失败
+
+先声明 HTTPX 运行依赖并更新锁：`uv add "httpx>=0.27,<1"`。把下面保存为 `order_service/external.py`。
 
 ```python
+# framework-example: F14
+import asyncio
+import time
 import httpx
-def handler(request):
-    return httpx.Response(200, json=[{"id":"A","amount_cents":10}])
-with httpx.Client(base_url="https://example.test", transport=httpx.MockTransport(handler), timeout=5.0) as client:
-    response = client.get("/orders")
-    response.raise_for_status()
-    assert response.json()[0]["amount_cents"] == 10
+class UpstreamError(RuntimeError):
+    pass
+class TransportError(UpstreamError):
+    pass
+class HttpError(UpstreamError):
+    pass
+class ParseError(UpstreamError):
+    pass
+class SchemaError(UpstreamError):
+    pass
+async def fetch_orders(client, *, retries=1, timeout=5.0, deadline=None):
+    if type(retries) is not int or retries < 0 or timeout <= 0:
+        raise ValueError("重试次数或超时非法")
+    budget_end = time.monotonic() + timeout * (retries + 1) if deadline is None else deadline
+    for attempt in range(retries + 1):
+        remaining = budget_end - time.monotonic()
+        if remaining <= 0:
+            raise TransportError("总预算耗尽")
+        try:
+            response = await client.get("/orders", timeout=min(timeout, remaining))
+        except httpx.TimeoutException as exc:
+            if attempt == retries:
+                raise TransportError("订单服务超时") from exc
+            continue
+        if response.status_code in {500, 502, 503, 504} and attempt < retries:
+            continue
+        if response.status_code >= 500:
+            raise HttpError(f"订单服务状态:{response.status_code}")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise HttpError(f"订单服务状态:{response.status_code}") from exc
+        try:
+            rows = response.json()
+        except ValueError as exc:
+            raise ParseError("订单响应不是合法JSON") from exc
+        if not isinstance(rows, list):
+            raise SchemaError("订单响应必须是列表")
+        return rows
+    raise AssertionError("不可到达")
+async def main():
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        200, json=[{"id": "A", "user": "Alice", "amount_cents": 1990, "status": "paid"}]))
+    async with httpx.AsyncClient(base_url="https://example.test", transport=transport) as client:
+        rows = await fetch_orders(client)
+    assert rows[0]["amount_cents"] == 1990
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-下一步分别将handler改成500、ReadTimeout、坏JSON；先确认错误被正确分类，再接入字段校验。
+`deadline` 是调用方传入的单调时钟绝对时间。每次重试都会重新计算剩余预算；省略时，教学实现用 `timeout × 总尝试次数` 建立本地保守上限。这个实现没有加入退避和抖动，生产策略应共享调用方deadline，并把退避放在剩余预算内。
 
-### 4.1 沿输入到结果逐步解释
+### 4.2 用替身固定每种失败
 
-客户端发出GET，MockTransport代替远端给出200及JSON列表。raise_for_status先判断协议状态；response.json再把内容解析为对象；金额字段的真实类型还需后续模型验证。
+#### 案例推进：逐项只改变一个响应
 
-把响应改为500且内容是HTML，若先解析JSON，会把服务故障误报为JSON故障。保持检查顺序便能把首个失败归到正确层。再把状态恢复200、内容改坏，才应在解析层失败。
+```python
+import asyncio
+import time
+import httpx
+from order_service.external import (
+    fetch_orders, TransportError, HttpError, ParseError, SchemaError)
+async def request(response=None, *, handler=None, retries=0):
+    transport = httpx.MockTransport(handler or (lambda request: response))
+    async with httpx.AsyncClient(base_url="https://example.test", transport=transport) as client:
+        return await fetch_orders(client, retries=retries, deadline=time.monotonic() + 1)
+async def main():
+    valid = [{"id": "A", "user": "Alice", "amount_cents": 1990, "status": "paid"}]
+    assert await request(httpx.Response(200, json=valid)) == valid
+    cases = [(httpx.Response(500, text="down"), HttpError),
+             (httpx.Response(200, text="<html>"), ParseError),
+             (httpx.Response(200, json={"orders": valid}), SchemaError)]
+    for response, error in cases:
+        try:
+            await request(response)
+        except error:
+            pass
+        else:
+            raise AssertionError("应得到对应错误")
+    def late(request):
+        raise httpx.ReadTimeout("late", request=request)
+    try:
+        await request(handler=late)
+    except TransportError:
+        pass
+    else:
+        raise AssertionError("超时应分类为传输错误")
+    calls = []
+    def recover(request):
+        calls.append(1)
+        return httpx.Response(503) if len(calls) == 1 else httpx.Response(200, json=valid)
+    assert await request(handler=recover, retries=1) == valid and len(calls) == 2
+asyncio.run(main())
+```
 
-最后给合法JSON中的金额填字符串，解析仍会成功，此时应由结构契约拒绝。三个反例说明“有响应”“能解析”“能用于计算”是逐步建立的保证。
+测试客户端由 `async with` 关闭，业务计算没有被 mock。500、坏 JSON、错误对象和超时都在首层失败；第一次503后第二次响应成功，才返回数据。
+
+### 4.3 接回同一订单业务
+
+#### 案例推进：合法响应才进入报告
+
+调用 `build_report(await fetch_orders(client, retries=1))`。字段错误、同 ID 冲突和金额汇总仍由第12章函数处理；适配器只把外部传输与信封错误转换为四类异常。不要在两处各写一份订单校验。
 
 ## 5. 动手练习
 
-### 本章累计任务：逐层拒绝外部错误
+### 本章累计任务：可靠读取外部订单
 
-对同一次读取注入500、超时、坏JSON和错误字段，分别记录首次失败层。合法响应才进入金额汇总，资源在所有路径关闭。
-
-**未通过时怎样定位：** 先解析500的HTML会误报JSON错误；重试必须区分只读与有副作用，并受总截止时间控制。
-
-**带到下一步：** 第15章反过来为其他客户端提供同样明确的服务契约。
-
-下方专题练习用于补当前卡点；先完成这一项累计任务，不另将所有索引作为必须并行完成的进度。
-
-### 练习一：响应分层
-
-实现注入HTTPX客户端的数据适配器，用MockTransport提供200合法列表、500、200非JSON、200字段错误和读取超时。依次进行状态检查、解析与业务验证；提交各错误在调用方看到的类别。
-
-验收：成功金额单位保持整数分；其他情况不会变成空订单；注入客户端的关闭责任明确；无真实网络也可重复执行。下方L21是对应题库任务。
-
-### 练习二：重试与预算
-
-先让只读查询前两次发生选定临时故障、第三次成功，检查尝试次数；再让故障超过上限，检查明确结束。用可控制的时钟或等待替身验证总预算，不把测试变成真实长时间等待。
-
-验收：结构错误不盲目重试；每次等待计入预算。写动作超时只记录为结果待确认，不直接声称远端没有完成。
-
-### 练习三：同步与异步契约一致
-
-为同步和异步适配器运行同一组成功/失败输入，结果语义一致。异步版补取消与资源清理事件；项目HTTP来源在此接入第12章报告程序。
+实现 `fetch_orders`，用 MockTransport 覆盖合法、500、超时、坏 JSON、错误结构和临时失败后成功。断言尝试次数、总预算、错误类别与客户端关闭；合法结果必须进入原有 `build_report`，失败结果不能变成空报告。
 
 ### L21：HTTP 分层错误（P49）
 
-用 HTTPX MockTransport 检查 GET /orders，分别返回合法列表、500、非 JSON 文本、结构错误对象，并模拟 ReadTimeout。状态检查、解析、校验依次发生。
-
-验收：成功返回真正数据，其他情况保留可区分错误；无真实网络依赖。生产客户端与测试客户端由外部注入，连接关闭责任清楚。
+用 HTTPX MockTransport 检查 GET /orders，分别返回合法列表、500、非 JSON 文本、结构错误对象，并模拟 ReadTimeout。状态检查、解析、校验依次发生；成功返回真正数据，其他情况保留可区分错误，客户端关闭责任清楚。
 
 ## 6. 验收与自测
 
-**行为验收：** 错误分类清楚，连接关闭，校验失败不执行业务动作，日志无密钥。
-
-**原理验收：** 合上资料解释本章一个机制，预测一个反例，说明规则属于语言语义、库约定还是实现观察。
+**验收命令：** 在项目根目录运行 `uv run --locked python -m pytest tests/test_external.py -q`；测试不得访问真实网络。
 
 ### 6.1 先预测，再查看参考推导
 
-MockTransport的所有测试通过后，哪些事情仍未证明？
+MockTransport 全部通过后，为什么仍不能说外部服务已经可靠？
 
 <details>
 <summary>完成预测后查看解释</summary>
 
-真实网络、服务契约部署、认证配置、连接复用及生产规模行为尚未证明。离线测试主要验证客户端如何处理受控响应与错误；将证据范围说清楚。
+替身没有验证真实 DNS、TLS、代理、认证、服务部署和容量。它证明的是客户端在受控输入下如何分类、重试和关闭；真实集成需要另行记录证据范围。
 
 </details>
 
 ## 7. 面试问答与迁移
 
-HTTP 超时后能否直接重试 POST？连接池与每次新建客户端有什么代价？
+**问：HTTP 超时后可以直接重试 POST 吗？**
+答：不能。远端可能已经写入但回执丢失。只有服务明确提供幂等契约时才用同一动作键和载荷重试；否则查询状态、对账或转人工。
 
-**参考回答：**
-
-1. 先定位超时发生在连接池等待、连接、发送还是读取；“远端已完成写入，但回执未到”使结果未知。不能仅凭超时重试POST。若接收方明确支持该操作的幂等契约，才按同一动作键和同一载荷重试；随便加一个请求头不产生幂等性。缺少此契约时，查询状态、对账或转人工处理。[HTTP重试语义](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)
-2. 连接池可复用已有连接，摊薄建连及TLS握手成本，但不自动提高所有负载的吞吐。应用生命周期内复用客户端，设置池容量、池等待时限和正确关闭；每请求创建客户端会降低复用并增加建连压力。
-3. 连接/读取等分项超时不等于整个任务截止时间。重试、退避和排队都消耗总预算；只重试约定的暂时性故障，限制次数并加入抖动，参数错误与无权访问不能靠重试修复。
-
-**换条件自测：** 在接收方提交后丢弃回执，使用同一键再请求，核对业务效果数；再改载荷复用旧键，应报冲突。这比只mock一个TimeoutError更能检验恢复设计。
+**问：为什么复用客户端？**
+答：连接池能摊薄建连和 TLS 成本，但不会自动提升所有负载的吞吐。客户端由应用级所有者关闭，并设置池容量、等待时限和总预算。
 
 ## 8. 本章小结与参考
 
-### 8.1 一页知识地图
+- 按传输、状态、解析、结构顺序检查，保留首个失败原因。
+- 合法订单进入同一 `build_report`，外部错误不能伪装成空数据。
+- 重试受错误类别、次数和总截止时间约束；写操作先确认幂等。
+- 本章交付可靠出站客户端，第15章用同一业务规则提供入站 API。
 
-**本章主问题：** 外部服务返回 200 却可能是一张错误网页，怎样沿一条请求逐层判断，并在有限预算内安全重试？
-
-**一条主线：**
-
-```text
-发出请求 → 传输、状态、JSON 与业务模型四层检查 → 可分类错误与受预算约束的重试
-```
-
-**三个关键词：** 边界、分类、预算——四层边界把“有响应”逐步变成“能计算”，错误分类决定能否重试，总预算限制重试的代价。
-
-**最容易错：**
-- 拿到响应就先 `json()`；500 加 HTML 会被误报成 JSON 错误，应先 `raise_for_status()` 判状态。
-- 解析成功就当成业务数据；金额是字符串或 `true` 时，仍要由结构或模型校验拒绝。
-- 超时后无条件重试 POST；远端可能已经写入，需要幂等键、结果查询或对账。
-- 只设一个 `timeout`；连接、读取、连接池等待与整个任务 deadline 是不同约束。
-
-**与前后章：** 上一章提供显式的环境、依赖与分层；本章把不可靠的外部依赖接到同一条业务链；下一章反过来用 FastAPI 对外提供同样清晰的契约。
-
-**学完应能：**
-- 用 `MockTransport` 注入 500、坏 JSON、结构错误与 `ReadTimeout`，指出首个失败层。
-- 写一个适配器，把合法响应转成内部订单，其余错误保留可区分类别。
-- 为只读查询设计有限重试与总预算，并说明写操作为何不能直接重试。
-- 明确 `Client`/`AsyncClient` 的创建、共享与关闭责任。
-
-### 8.2 日常工作注意事项
-
-- 网络成功或HTTP 200后仍检查响应结构与业务结果；错误JSON和缺字段要有单独失败案例。
-- 只重试按契约可重试的故障，并设置次数与总时限；付款、提交等动作先确认幂等或对账机制。
-- 复用适当范围的客户端并确保关闭；不要在每次调用里无界创建连接，也不在日志暴露授权请求头。
-
-### 8.3 参考与后续学习
-
-本章建立可靠调用外部服务的边界。下一章反过来向外提供接口，复用模型、错误分类与资源生命周期。
-
-官方参考：[本章资料](https://www.python-httpx.org/quickstart/)。动态框架资料以2026-11-04核对的入口为准，具体SDK版本在实际实践时重新核对并记录锁文件。
+参考：[HTTPX AsyncClient](https://www.python-httpx.org/async/)、[HTTP 重试语义](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)。
 
 [上一章](13-环境、分层、配置与工程交付.md) · [下一章](15-FastAPI、接口模型与服务生命周期.md)
