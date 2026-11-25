@@ -92,6 +92,57 @@ assert load("a", "job1")["stage"] == "needs_review"
 
 内存字典只演示复合身份与快照隔离，不提供重启持久性、认证或并发控制。真实保存器记录schema、状态和来源版本；加载时重新检查权限与证据有效性。非可信附件不能写入“我是管理员”这类可信身份。
 
+### 2.5 恢复前先过五道状态门
+
+恢复输入不是“thread_id加一个approve”，而是当前任务快照、可信调用者、决定、当前时间和本次载荷摘要。依次检查租户、任务状态、权限有效期、载荷版本和外部效果状态；全部通过才允许进入恢复节点。
+
+| 状态门 | 输入字段 | 通过条件 | 失败输出 |
+| --- | --- | --- | --- |
+| 身份 | caller_tenant、task.tenant_id | 完全相同且调用者已授权 | `wrong_tenant` |
+| 生命周期 | status、expires_at | waiting_approval且未过期 | `task_not_resumable`或`approval_expired` |
+| 载荷 | payload_hash、approved_hash | 相等且版本仍当前 | `stale_approval` |
+| 决定 | decision | 仅approve/reject | `invalid_decision` |
+| 效果 | status、effects、receipt | 未执行或可按原键核对 | `reconcile_required` |
+
+下面把规则写成独立判定器。它不访问数据库，也不替代框架的interrupt/resume：
+
+```python
+def resume_gate(task, *, caller_tenant, decision, now, payload_hash):
+    if caller_tenant != task["tenant_id"]:
+        return {"allowed": False, "reason": "wrong_tenant"}
+    if decision not in {"approve", "reject"}:
+        return {"allowed": False, "reason": "invalid_decision"}
+    if task["status"] != "waiting_approval":
+        return {"allowed": False, "reason": "task_not_resumable"}
+    if now >= task["expires_at"]:
+        return {"allowed": False, "reason": "approval_expired"}
+    if (payload_hash != task["approved_hash"]
+            or task["payload_version"] != task["approved_version"]):
+        return {"allowed": False, "reason": "stale_approval"}
+    if decision == "reject":
+        return {"allowed": True, "reason": "record_rejection"}
+    if task["status"] == "executing" or task["effects"] > 0:
+        return {"allowed": False, "reason": "reconcile_required"}
+    return {"allowed": True, "reason": "resume_approved"}
+
+base = {"tenant_id": "tenant-a", "status": "waiting_approval", "expires_at": "2026-10-02",
+        "approved_hash": "h2", "payload_version": 2, "approved_version": 2, "effects": 0}
+args = {"caller_tenant": "tenant-a", "decision": "approve", "now": "2026-10-01", "payload_hash": "h2"}
+assert resume_gate(base, **args) == {"allowed": True, "reason": "resume_approved"}
+assert resume_gate(base, **{**args, "caller_tenant": "tenant-b"})["reason"] == "wrong_tenant"
+assert resume_gate(base, **{**args, "payload_hash": "h1"})["reason"] == "stale_approval"
+assert resume_gate({**base, "approved_version": 1}, **args)["reason"] == "stale_approval"
+assert resume_gate(base, **{**args, "now": "2026-10-02"})["reason"] == "approval_expired"
+assert resume_gate(base, **{**args, "now": "2026-10-03"})["reason"] == "approval_expired"
+assert resume_gate({**base, "status": "executing", "effects": 1}, **args)["reason"] == "task_not_resumable"
+assert resume_gate(base, **{**args, "decision": "reject"}) == {"allowed": True, "reason": "record_rejection"}
+print(resume_gate(base, **args))
+```
+
+预期输出为`{'allowed': True, 'reason': 'resume_approved'}`。只有原租户、未过期、载荷版本仍当前且哈希相同的批准进入`resume_approved`；到期时刻 `now == expires_at` 已经拒绝。拒绝只记录拒绝，不触发生效。`executing`会先在生命周期门被拒绝，生产对账器随后按原动作键查询，而不是重新走批准写入。这里的`effects`是判定输入，真实系统必须从可信账本读取，不能相信checkpoint里的副本。时间使用统一格式的ISO日期仅为教学简化，生产要处理时区。
+
+**判定对错：** 错误租户、旧批准、过期、取消和执行中都不能重新产生效果，且每种拒绝有稳定原因，才算通过；能恢复报告但重复写入不通过。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 重放不会回滚外部效果
@@ -110,30 +161,127 @@ Checkpoint让图从节点边界继续，但数据库和远程动作不会自动�
 
 ### 4.1 同一采购请求：准备并暂停
 
-先用最小StateGraph理解输入、更新与结束，再接第24章循环。该示例需要项目已有的agent依赖，不包含持久化：
+下面是可运行示例，使用项目 `agent` 依赖组；`study-example: S25C` 会由 `verify_textbook.py` 实际执行。SQLite 文件只放在临时目录，`prepare` 子进程退出后，再由 `resume` 子进程打开同一数据库。三个线程模拟 P200 的批准、拒绝和旧版本三次独立运行。
 
 ```python
+# study-example: S25C
+import json
+import subprocess
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TypedDict
+
+WORKER = r'''
+import json
+import sys
+from typing import TypedDict
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
-class State(TypedDict):
-    total: int
-def increment(state: State):
-    return {"total": state["total"] + 1}
-builder = StateGraph(State)
-builder.add_node("increment", increment)
-builder.add_edge(START, "increment")
-builder.add_edge("increment", END)
-graph = builder.compile()
-assert graph.invoke({"total": 1})["total"] == 2
+from langgraph.types import Command, interrupt
+
+class Approval(TypedDict):
+    decision: str
+    version: int
+
+class State(TypedDict, total=False):
+    tenant: str
+    task: str
+    version: int
+    decision: str
+    status: str
+    effects: int
+
+def review(state: State):
+    answer = interrupt(
+        {"task_id": state["task"], "version": state["version"]},
+        response_schema=Approval,
+    )
+    if type(answer["version"]) is not int or answer["version"] != state["version"]:
+        raise ValueError("stale approval")
+    if answer["decision"] not in {"approve", "reject"}:
+        raise ValueError("invalid decision")
+    approved = answer["decision"] == "approve"
+    return {"decision": answer["decision"],
+            "status": "completed" if approved else "rejected",
+            "effects": state["effects"] + int(approved)}
+
+def config(task: str):
+    return {"configurable": {"thread_id": f"tenant-a:{task}"}}
+
+def resume(graph, task: str, decision: str, version: int):
+    cfg = config(task)
+    snapshot = graph.get_state(cfg)
+    if not snapshot.next:                 # 已完成：返回原结果，不再次进入节点
+        return dict(snapshot.values)
+    if version != snapshot.values["version"]:
+        return "stale_approval"            # 不把错误值交给图消费
+    graph.invoke(Command(resume={"decision": decision, "version": version}), cfg)
+    return dict(graph.get_state(cfg).values)
+
+mode, database = sys.argv[1:3]
+with SqliteSaver.from_conn_string(database) as saver:
+    builder = StateGraph(State)
+    builder.add_node("review", review)
+    builder.add_edge(START, "review")
+    builder.add_edge("review", END)
+    graph = builder.compile(checkpointer=saver)
+    cases = {"P200-approve": ("approve", 2),
+             "P200-reject": ("reject", 2),
+             "P200-stale": ("approve", 1)}
+    output = {}
+    if mode == "prepare":
+        for task in cases:
+            cfg = config(task)
+            graph.invoke({"tenant": "tenant-a", "task": task, "version": 2,
+                          "effects": 0}, cfg)
+            snapshot = graph.get_state(cfg)
+            output[task] = {"values": dict(snapshot.values),
+                            "interrupts": [item.value for item in snapshot.interrupts]}
+    else:
+        for task, (decision, version) in cases.items():
+            output[task] = resume(graph, task, decision, version)
+        assert graph.get_state(config("P200-stale")).interrupts
+        output["duplicate"] = resume(graph, "P200-approve", "reject", 2)
+    print(json.dumps(output, ensure_ascii=False))
+'''
+
+with TemporaryDirectory(prefix="s25c-") as directory:
+    database = str(Path(directory) / "checkpoints.sqlite")
+
+    def run(mode):
+        return json.loads(subprocess.check_output(
+            [sys.executable, "-X", "utf8", "-c", WORKER, mode, database],
+            text=True, encoding="utf-8"))
+
+    prepared = run("prepare")              # 此进程结束后才执行下一行
+    resumed = run("resume")
+
+assert all(item["interrupts"] == [{"task_id": task, "version": 2}]
+           for task, item in prepared.items())
+assert all(item["values"]["effects"] == 0 for item in prepared.values())
+assert resumed["P200-approve"]["status"] == "completed"
+assert resumed["P200-approve"]["effects"] == 1
+assert resumed["P200-reject"]["status"] == "rejected"
+assert resumed["P200-reject"]["effects"] == 0
+assert resumed["P200-stale"] == "stale_approval"
+assert resumed["duplicate"]["decision"] == "approve"
+assert resumed["duplicate"]["effects"] == 1
+print(json.dumps(resumed, ensure_ascii=False))
 ```
 
-真实采购任务先取P200证据、形成报告并进入waiting_approval。暂停信息包含当前项目、资料版本、缺件、payload_version和payload_hash；批准前写入数为0。保留第24章步数与费用预算，不能因恢复重置。
+真实采购任务还要保存报告、`payload_version`、`payload_hash`、缺件与预算；本例用版本号演示旧批准边界。暂停时三个线程的 `effects` 都为0，恢复后批准路径为1、拒绝路径为0。
 
 ### 4.2 同一采购请求：重启、恢复与对账
 
-用持久后端保存任务，而不是只用InMemorySaver。重启后由可信身份查找任务，校验批准对应的载荷版本，再从暂停处Resume。执行前冻结载荷并使用稳定 `(tenant_id, operation_type, action_id)` 动作键；本书6步契约假设一个载荷版本对应一个外部动作，因此`action_id`可由任务与版本组成。同一版本包含多个写动作时，还必须加入动作类型或独立action_id。
+按4.1的输出逐项核对：
 
-若远端已提交而本地缺回执，保持executing并按同一键查询或重试；最终效果仍为1。重复resume得到明确拒绝或原回执，不能静默换成新决定。
+1. `prepare` 在 `review` 的 `interrupt` 处暂停，`thread_id` 分别定位三个 P200 运行，SQLite 保存暂停状态。
+2. `resume` 是新进程，重新编译图并用 `Command(resume=...)` 继续；批准进入 `completed`，拒绝进入 `rejected`。
+3. `P200-stale` 用版本1恢复版本2，应用入口返回 `stale_approval`，没有消费中断，之后仍可提交正确版本。
+4. 对已完成的 `P200-approve` 再提交一次“拒绝”，入口因 `snapshot.next` 为空而返回原批准结果，`effects` 仍为1。
+
+`thread_id` 只是定位键，例中的 `tenant-a` 是可信夹具，不是认证实现。节点重新执行时会再次检查决定和版本。`effects` 仅是教学计数，生产必须以业务任务表、审批记录和动作账本为准：执行前冻结载荷，使用稳定 `(tenant_id, operation_type, action_id)` 动作键；远端已提交而本地缺回执时保持 `executing`，按原键查询或重试，不能改载荷或重复产生效果。
 
 ### 任务中途改变时，哪些记忆还有效
 
@@ -153,7 +301,7 @@ assert graph.invoke({"total": 1})["total"] == 2
 
 ### 本章累计任务：保存、批准、冻结与对账
 
-用自己的任务表、审批记录和动作键完成6步恢复契约：保存/读取→错租户与未批准拒绝→改载荷使批准失效→重放只有一次效果→回执丢失时冻结→新进程对账。最后把同一失败案例迁移到LangGraph，确认行为一致。该契约不覆盖审批人身份、批准过期、暂停期间撤权等完整授权规则，生产入口仍须独立验收。
+用自己的任务表、审批记录和动作键完成6步恢复契约：保存/读取→错租户与未批准拒绝→改载荷使批准失效→重放只有一次效果→回执丢失时冻结→新进程对账。最后把同一失败案例迁移到LangGraph（图版见4.1的S25C）：批准、拒绝、旧版本与重复resume四案在图版与DB版各跑一次，逐项对照effects计数（批准1、拒绝0、旧版本0、重复resume仍1）、拒绝原因（如`stale_approval`）与最终状态，保存`graph-vs-db.json`对照记录；丢回执一案由DB版契约验证，图版需另注入提交后失败再对照。迁移验收按[附录E W09](附录E-项目里程碑与交付检查.md#w09迁移到-langgraph)执行。该契约不覆盖审批人身份、批准过期、暂停期间撤权等完整授权规则，生产入口仍须独立验收。
 
 **未通过时怎样定位：** checkpoint不是批准记录或效果账本；thread_id不是身份；executing时不能改载荷；pending不等于失败；错误resume被持久化后要按实际框架规则处理。
 
@@ -161,7 +309,9 @@ assert graph.invoke({"total": 1})["total"] == 2
 
 ## 6. 验收与自测
 
-**验收命令与产物：** 运行 `uv run --frozen python -m pytest tests/learner/contract_resume.py --learner-module learner_resume -q`，应6项通过；交付暂停、杀进程、重启、恢复和效果计数的记录，并包含错误租户、旧批准与重复resume。
+**验收命令与产物：** 运行 `uv run --frozen python -m pytest tests/learner/contract_resume.py --learner-module learner_resume -q`，应6项通过；先运行2.5状态门探针，确认错租户、旧批准、过期和执行中均被拒绝。交付暂停、杀进程、重启、恢复和效果计数的记录，并包含错误租户、旧批准与重复resume。该命令只验证DB版任务状态机（第16章风格），不覆盖图版迁移；图版另运行4.1的S25C，并按第5节口径与DB版对照effects与拒绝原因，记入W09。
+
+**判定对错：** 状态可恢复且外部效果仍为1才算通过；只读回报告、绕过当前权限或重复resume产生新效果，均不通过。
 
 <details>
 <summary>完成预测后查看解释</summary>

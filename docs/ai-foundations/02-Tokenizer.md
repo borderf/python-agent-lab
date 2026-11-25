@@ -32,23 +32,26 @@ BPE（Byte Pair Encoding）的直觉：
 3. 把最高频的一对合并成新 token；
 4. 重复，直到词表达到目标大小。
 
-玩具例子：
+玩具例子（为看清合并，暂时省略词尾边界符号）：
 
 ```text
 语料：low lower lowest
-初始：l o w _ l o w e r _ l o w e s t
-高频对：l+o -> lo
-再合并：lo+w -> low
-...
+初始：l o w | l o w e r | l o w e s t，共 14 个符号
+第1轮：l+o 出现3次，o+w 出现3次；按“首次出现优先”的玩具平局规则选 l+o
+合并后：lo w | lo w e r | lo w e s t，共 11 个符号
+第2轮：lo+w 出现3次，合并为 low
+结果：low | low e r | low e s t，共 8 个符号
 ```
 
-常见词/词根会变成更长的 token，生僻词被拆成多个片段。这样词表有限，又能表示任意文本；代价是 token 数不固定。
+用这两条规则编码 `lowest`，得到 `["low", "e", "s", "t"]`，共 4 个 token。**预期结果不是“所有词都变成一个 token”**，而是常见前缀被压缩、剩余片段仍可表示。训练合并规则时频率来自语料；规则固定后编码新文本，只应用合并，不重新统计频率。常见词/词根会变成更长的 token，生僻词被拆成多个片段。这样词表有限，又能表示任意文本；代价是 token 数不固定。
 
 这里要区分“训练合并规则”和“使用已训练好的规则编码”。训练时若多对并列最高频，应固定语料处理顺序与平局选择规则；玩具实现可以约定字典序，但不能把某一种选择当成所有BPE的统一规定。例如[subword-nmt作者实现](https://github.com/rsennrich/subword-nmt/blob/master/subword_nmt/learn_bpe.py)按频率、pair取最大值，并列时取字典序较大的一对。训练完成后，给定同一套词表、合并规则和预处理，通常不再重新统计训练语料的频率，而是据这些规则编码；不能把训练的平局问题说成每次编码都随机。
 
 ### 2.3 字节级 BPE 与多语言
 
 现代模型常用 **byte-level BPE**：先把 UTF-8 字节映射到可打印字符，再在字节序列上合并。好处是任何 Unicode 文本都能表示，不会出现“未登录字符”；代价是一个汉字可能占多个 token。
+
+先分清字节与 token：汉字“预”的 UTF-8 是 3 个字节 `E9 A2 84`，字符数是 1；但 byte-level BPE 可能把其中一段与相邻字节合并，所以既不能断言它恰好是 3 个 token，也不能按 1 个汉字算 1 个 token。 Emoji 也可能由多个 UTF-8 字节组成。可验证结果只有“编码过程不因未见字符失败”，具体 token 数仍要运行目标 tokenizer。
 
 - 英文常见词可能 1 个 token；
 - 中文常见词可能 1–2 个 token，生僻字更多；
@@ -65,6 +68,8 @@ BPE（Byte Pair Encoding）的直觉：
 - 填充 token。
 
 这些 token 参与训练和协议解析，但通常不显示给用户。自己拼接消息时要用服务规定的协议，不要手写特殊 token 字符串。
+
+最小预算例：正文 100 token，消息模板可能加角色/边界标记。若目标 tokenizer 实测整套消息为 108 token，预算就要按 108 而不是 100；输出预算还要另算。把特殊标记当普通正文重复粘贴，可能让协议解析错位；截断时误删结束标记，也可能让工具调用或回答无法正常结束。
 
 ### 2.5 上下文窗口与计费
 
@@ -94,15 +99,63 @@ token 是统计压缩的单位，不是词法/句法单位。一个 token 可能
 
 按 token 截断可能把一个词/多字节字符/工具参数切断。对话历史要保留系统约束、当前任务和证据；长文用分块 + 检索 + 引用，不要只截前 N 个 token。
 
+反例：工具回包 JSON 尾部是 `"limit":20}`，若从中间截断，不仅字段读不出，还可能把 `20` 截成 `2`。先按完整消息/工具结果分块，再按 token 预算选择；必须硬截时记录被丢弃的 span，并把任务标为待复核，不能伪装成完整输入。
+
 ## 4. 示例与逐步走查
 
 ```python
-# 伪代码：不同 tokenizer 的计数口径不同
-text = "预付款上限为20%。"
-for tokenizer in [tokenizer_a, tokenizer_b]:
-    ids = tokenizer.encode(text)
-    print(tokenizer.name, len(ids), ids)
+# runnable
+from collections import Counter
+
+words = ["low", "lower", "lowest"]
+units = [list(word) for word in words]
+merges = []
+print("输入:", words)
+for _ in range(2):
+    pairs = [tuple(word[i:i + 2]) for word in units for i in range(len(word) - 1)]
+    counts = Counter(pairs)
+    pair = max(counts, key=counts.get)  # 并列时取首次出现，教学用固定规则
+    merges.append(pair)
+    for word in units:
+        i = 0
+        merged = []
+        while i < len(word):
+            if i + 1 < len(word) and (word[i], word[i + 1]) == pair:
+                merged.append("".join(pair))
+                i += 2
+            else:
+                merged.append(word[i])
+                i += 1
+        word[:] = merged
+    print("中间结果:", {"merge": pair, "symbols": units})
+
+def encode(word):
+    result = list(word)
+    for pair in merges:
+        i = 0
+        merged = []
+        while i < len(result):
+            if i + 1 < len(result) and (result[i], result[i + 1]) == pair:
+                merged.append("".join(pair))
+                i += 2
+            else:
+                merged.append(result[i])
+                i += 1
+        result = merged
+    return result
+
+tokens = encode("lowest")
+print("输出:", {"tokens": tokens, "count": len(tokens)})
+assert merges == [("l", "o"), ("lo", "w")]
+assert tokens == ["low", "e", "s", "t"]
+
+window, system, history, output_budget, reserve = 8192, 500, 2000, 1000, 200
+evidence_budget = window - system - history - output_budget - reserve
+print("预算:", {"剩余": window - system - history - output_budget, "证据可用": evidence_budget})
+assert evidence_budget == 4492
 ```
+
+运行后，合并序列应为 `l+o→lo`、`lo+w→low`，`lowest` 编码为 4 段。预算例子里，8192 减固定开销后剩 4692 token，再留 200 安全余量，证据最多用 4492。**余量不是模型能力，而是给模板差异、工具回包和估算误差留的空间。**
 
 逐步检查：
 
@@ -116,21 +169,23 @@ for tokenizer in [tokenizer_a, tokenizer_b]:
 
 ### 练习一：跟写
 
-取一段中英文混合文本，用两个不同 tokenizer 计数，比较差异；找出一个“汉字被拆成多个 token”的例子。
+取一段中英文混合文本，用两个不同 tokenizer 计数，比较差异；找出一个“汉字被拆成多个 token”的例子。完成标准：记录模型/tokenizer 版本、原文、ID 列表与总数；只写“中文更多”而没有 ID 证据不算完成。
 
 ### 练习二：改造
 
-给定 8k token 窗口、系统提示 500、历史 2k、输出预算 1k，剩余给检索证据多少？说明为什么要留余量。
+给定 8k token 窗口、系统提示 500、历史 2k、输出预算 1k，剩余给检索证据多少？说明为什么要留余量。完成标准：先得 4692；若留 200 余量，证据预算 4492。说明余量用于模板、工具结果和估算误差，不能拿余量继续塞正文。
 
 ### 练习三：独立
 
-写一个 `fit_context` 函数：按 token 预算裁剪历史，但保留系统约束、最近任务和引用 ID；说明裁剪顺序和不可裁剪项。
+写一个 `fit_context` 函数：按 token 预算裁剪历史，但保留系统约束、最近任务和引用 ID；说明裁剪顺序和不可裁剪项。完成标准：超限时优先删最旧且无引用历史；系统约束被删或引用 ID 丢失应报错/待复核，而不是静默返回。
 
 ## 6. 验收与自测
 
 **行为验收：** 能用目标 tokenizer 计数；能解释中英文/代码差异；能设计不切断证据的上下文裁剪。
 
 **原理验收：** 能讲 BPE 合并过程；能说明 token 与字符/单词/语义单位的区别；能说出特殊 token 的作用。
+
+**操作：** 运行玩具 BPE，并用目标 tokenizer 对同一段中英文重新计数。**预期：** `lowest` 变成 4 段，8192 窗口的示意证据预算为 4492；真实模型计数可以不同。**证据：** 保存每轮合并对、编码 ID 和输入/输出/模板 token 分项，而不是只记录一个总字数。
 
 ### 6.1 先预测，再查看解释
 

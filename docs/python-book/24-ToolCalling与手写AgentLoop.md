@@ -124,6 +124,65 @@ assert summarize_actions(actions) == {"succeeded":1, "failed":0, "unknown":1,
 
 第一轮提出 `get_paid_total({"user":"Alice"})`；程序从可信会话取得租户并执行；第二轮收到带C1的真实结果后才允许final。trace中的steps与tool_calls分别计数，二者不能混用。
 
+### 2.5 用事件序列判断循环是否真正闭环
+
+把循环看成状态转换，比检查最终一句“已完成”更可靠。输入是带类型和call_id的事件；每处理一个事件就更新当前阶段；输出是停止原因、模型步数和已观察调用。未知事件、结果错配或必需工具未返回，都必须显式失败。
+
+| 当前状态 | 事件 | 下一状态 | 输出/失败 |
+| --- | --- | --- | --- |
+| model_requested | tool_call C1 | waiting_tool | 记录C1与steps；参数授权此时已通过 |
+| waiting_tool | tool_result C1 | model_requested | 记录真实观察；C2或重复结果失败 |
+| model_requested | final | stopped | 必需调用均已观察才可结束 |
+| 任意状态 | 超过max_steps或等待结束 | stopped/budget_exhausted | 保留未完成项，不伪造final |
+
+下面只审计事件，不重复实现第24章的工具执行器：
+
+```python
+def audit_loop(events, required_calls, max_steps=4):
+    if type(max_steps) is not int or max_steps < 1:
+        raise ValueError("max_steps必须为正整数")
+    stage, pending, observed, steps = "model_requested", None, [], 0
+    for event in events:
+        kind, call_id = event
+        if kind == "tool_call":
+            if stage != "model_requested" or not isinstance(call_id, str) or not call_id:
+                return {"stop_reason": "invalid_tool_call", "steps": steps, "observed": observed}
+            steps += 1
+            if steps > max_steps:
+                return {"stop_reason": "budget_exhausted", "steps": steps, "observed": observed}
+            pending, stage = call_id, "waiting_tool"
+        elif kind == "tool_result":
+            if stage != "waiting_tool" or call_id != pending or call_id in observed:
+                return {"stop_reason": "result_mismatch", "steps": steps, "observed": observed}
+            observed.append(call_id)
+            pending, stage = None, "model_requested"
+        elif kind == "final":
+            if stage != "model_requested":
+                return {"stop_reason": "final_before_observation", "steps": steps, "observed": observed}
+            steps += 1
+            missing = [item for item in required_calls if item not in observed]
+            if steps > max_steps:
+                return {"stop_reason": "budget_exhausted", "steps": steps, "observed": observed}
+            return {"stop_reason": "missing_observation" if missing else "final",
+                    "steps": steps, "observed": observed}
+        else:
+            return {"stop_reason": "unknown_event", "steps": steps, "observed": observed}
+    return {"stop_reason": "missing_tool_result" if stage == "waiting_tool" else "no_final",
+            "steps": steps, "observed": observed}
+
+closed = audit_loop([("tool_call", "C1"), ("tool_result", "C1"), ("final", None)], ["C1"])
+assert closed == {"stop_reason": "final", "steps": 2, "observed": ["C1"]}
+assert audit_loop([("final", None)], ["C1"])["stop_reason"] == "missing_observation"
+assert audit_loop([("tool_call", "C1"), ("tool_result", "C2")], ["C1"])["stop_reason"] == "result_mismatch"
+assert audit_loop([("tool_call", "C1")], ["C1"])["stop_reason"] == "missing_tool_result"
+assert audit_loop([("tool_call", "C1"), ("tool_result", "C1"), ("final", None)], ["C1"], 1)["stop_reason"] == "budget_exhausted"
+print(closed)
+```
+
+预期输出为`{'stop_reason': 'final', 'steps': 2, 'observed': ['C1']}`。关键断言说明：直接final会因缺少C1观察失败，C2不能冒充C1结果，只有tool_call而没有结果时仍处于等待。真实轨迹还要在执行前记录授权与参数校验；本探针只验证顺序契约，不能证明业务调用或金额正确。
+
+**判定对错：** 同一call_id的请求与结果齐全、steps为2且停止原因为final才算闭环；最终文本正确但事件缺观察，或工具结果乱序匹配错，均不通过。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 校验与回填把模型建议变成可验证动作
@@ -308,6 +367,64 @@ assert outcome["trace"][0]["call_id"] == "C1"
 
 这12步不证明真实模型会选对工具，也不包含供应商原生协议、审批与跨进程恢复。接真实模型时由外层适配消息格式；审批与幂等接[学习者契约](../../tests/learner/练习说明.md#审批与幂等契约)，第25章再处理暂停恢复。
 
+### 4.3 流式工具参数：增量装配，闭合才执行
+
+第18章S18E处理半个UTF-8字符；这里把同一边界推进到工具参数。NDJSON每行本身是合法JSON，但`args_delta`只是参数字符串的一段：行可解析不等于参数完整。半段参数不执行，参数JSON闭合且流声明结束后才校验并执行。
+
+```python
+# study-example: S24D
+import json
+
+executed = []
+
+def execute(name, arguments):
+    if (name != "get_paid_total" or set(arguments) != {"user"}
+            or not isinstance(arguments["user"], str) or not arguments["user"].strip()):
+        raise ValueError("arguments do not match the tool contract")
+    executed.append((name, dict(arguments)))
+    return {"paid_amount_cents": 79800}
+
+def consume(lines):
+    buffer, name, ended = "", None, False
+    for line in lines:
+        event = json.loads(line)            # NDJSON行边界：每行自身合法
+        if event.get("done") is True:
+            ended = True
+            break
+        name = event.get("name", name)
+        buffer += event["args_delta"]
+        try:
+            json.loads(buffer)
+        except ValueError:
+            continue                        # 半段参数：只累积，不执行
+        # 即使此刻已闭合，也等结束事件，不提前执行
+    if not ended:
+        raise ValueError("stream missing end event")
+    arguments = json.loads(buffer)          # 结束时仍半段：抛错，零执行
+    return execute(name, arguments)
+
+def delta(call_id, fragment, **extra):
+    return json.dumps({"call_id": call_id, "args_delta": fragment, **extra}, ensure_ascii=False)
+
+full = [delta("C1", '{"user":"Al', name="get_paid_total"),
+        delta("C1", 'ice"}'),
+        delta("C1", "", done=True)]
+assert consume(full) == {"paid_amount_cents": 79800}
+assert executed == [("get_paid_total", {"user": "Alice"})]
+closed_early = [delta("C1", '{"user":"Alice"}', name="get_paid_total")]
+for bad in (full[:2], [full[0], delta("C1", "", done=True)], closed_early):
+    try:
+        consume(bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("incomplete or unended stream must not execute")
+assert len(executed) == 1
+print("executed", len(executed))
+```
+
+`S24D` 的预期结果是控制台输出 `executed 1`：完整流装配出 `{"user":"Alice"}` 并恰好执行一次；缺结束事件（`full[:2]`）、结束时仍半段参数（首段+done）与参数已闭合但流未结束（`closed_early`）都抛 `ValueError`，执行计数保持1。执行过程先按行解析事件、只累积 `args_delta`，结束事件后才整体解析参数并走工具契约校验。边界是：本探针不检查call_id错配与多调用交错（见S24C），也不处理UTF-8半字节（见第18章S18E）；真实供应商协议用自己的事件字段与完成原因，适配层仍须先确认流完整再执行。
+
 ## 5. 动手练习
 
 ### 本章累计任务：看见同一采购请求的真实工具执行
@@ -320,7 +437,9 @@ assert outcome["trace"][0]["call_id"] == "C1"
 
 ## 6. 验收与自测
 
-**验收命令与产物：** 运行 `uv run --frozen python -m pytest tests/learner/contract_agent.py --learner-module learner_agent -q`，应12项通过；同时保存一条trace，显示C1只执行一次且结果进入第二轮消息。
+**验收命令与产物：** 运行 `uv run --frozen python -m pytest tests/learner/contract_agent.py --learner-module learner_agent -q`，应12项通过；运行2.5事件探针，闭环输出应为`steps=2、observed=['C1']、stop_reason='final'`，缺结果与错配必须失败；运行4.3装配探针，半段参数、缺结束事件与提前闭合均零执行，完整流恰好执行一次。同时保存一条trace，显示C1只执行一次且结果进入第二轮消息。
+
+**判定对错：** 真实执行、同call_id回填和停止边界都有证据才通过；猜对金额或最终文本正确不能替代观察。
 
 <details>
 <summary>完成预测后查看解释</summary>

@@ -47,6 +47,90 @@ fan-out分发独立任务，fan-in等待并合并。一个角色超时，其空�
 - 合并不得采用最后写入覆盖、角色优先级或多数票消除冲突；完全相同的发现才去重，同码异证据全部保留，`conflicts`同时保存完整发现与证据ID，并按规范JSON稳定排序，顺序反转不改变结论。
 - 取消采用协作式信号并等待子任务收尾；无法证明远端写入已停止时，保留未知状态并按动作键对账。
 
+### 2.4 独立离线实验：观察分工、并行、合并与退出
+
+累计任务可以先不接真实模型。下面只实现一个确定性调度器：输入角色、虚拟耗时和依赖；输出start/end/timeout事件、完成顺序、退出原因。合同角色依赖预算结果，资格角色独立，因此串行与并行会有不同的完成时间。它不复制ProcureAgent，也不把虚拟耗时当真实性能。
+
+```python
+def schedule(jobs, *, parallel, deadline):
+    if type(parallel) is not bool or type(deadline) is not int or deadline < 1:
+        raise ValueError("parallel必须为布尔值，deadline必须为正整数")
+    if not isinstance(jobs, dict) or not jobs:
+        raise ValueError("至少需要一个角色")
+    for name, spec in jobs.items():
+        if type(spec["duration"]) is not int or spec["duration"] < 1:
+            raise ValueError("虚拟耗时必须为正整数")
+        deps = spec["deps"]
+        if not isinstance(deps, list) or len(set(deps)) != len(deps) or any(dep not in jobs for dep in deps):
+            raise ValueError("依赖必须是不重复的已知角色")
+
+    pending, running, finished = set(jobs), {}, {}
+    events, completion_order = [], []
+    now = 0
+
+    def start_ready():
+        ready = sorted(name for name in pending if set(jobs[name]["deps"]) <= set(finished))
+        for name in ready:
+            if running and not parallel:
+                break
+            pending.remove(name)
+            running[name] = now + jobs[name]["duration"]
+            events.append({"t": now, "event": "start", "role": name})
+
+    while pending or running:
+        start_ready()
+        if not running:
+            if pending:
+                raise ValueError("依赖成环，无法调度")
+            break
+        next_time = min(running.values())
+        if next_time > deadline:
+            for role in sorted(running):
+                events.append({"t": deadline, "event": "timeout", "role": role})
+            for role in sorted(pending):
+                events.append({"t": deadline, "event": "blocked", "role": role})
+            return {"status": "partial", "exit_reason": "deadline_exceeded", "elapsed": deadline,
+                    "completion_order": completion_order, "events": events}
+        now = next_time
+        for role in sorted(name for name, end in running.items() if end == now):
+            del running[role]
+            finished[role] = now
+            completion_order.append(role)
+            events.append({"t": now, "event": "end", "role": role})
+
+    return {"status": "completed", "exit_reason": "all_roles_completed", "elapsed": now,
+            "completion_order": completion_order, "events": events}
+
+jobs = {"budget": {"duration": 3, "deps": []},
+        "qualification": {"duration": 2, "deps": []},
+        "contract": {"duration": 4, "deps": ["budget"]}}
+serial = schedule(jobs, parallel=False, deadline=20)
+parallel_run = schedule(jobs, parallel=True, deadline=20)
+partial = schedule(jobs, parallel=True, deadline=6)
+assert serial["elapsed"] == 9 and serial["completion_order"] == ["budget", "contract", "qualification"]
+assert parallel_run["elapsed"] == 7 and parallel_run["completion_order"] == ["qualification", "budget", "contract"]
+assert partial["status"] == "partial" and partial["exit_reason"] == "deadline_exceeded"
+assert partial["completion_order"] == ["qualification", "budget"]
+assert partial["events"][-1] == {"t": 6, "event": "timeout", "role": "contract"}
+print({"serial_elapsed": serial["elapsed"], "parallel_elapsed": parallel_run["elapsed"],
+       "partial_status": partial["status"], "partial_completed": partial["completion_order"]})
+```
+
+预期输出为`{'serial_elapsed': 9, 'parallel_elapsed': 7, 'partial_status': 'partial', 'partial_completed': ['qualification', 'budget']}`。串行时独立资格角色也可能因调度顺序后执行；并行时它先在2完成，预算在3完成后合同才开始。截止时间6时合同超时，整体必须`partial`并记录`deadline_exceeded`，不能拿另外两项的成功推断合同无风险。把依赖删掉再运行，可观察“假独立”怎样让合同提前；把`deadline`改为3，则预算与资格刚完成、合同无法启动。
+
+合并是另一条独立边界，直接复用4.2的S28A探针：完全相同的发现去重，同风险码不同证据保留冲突，反转输入顺序结果不变。调度器只负责时间与退出，不能替证据冲突投票。
+
+| 可观察对照 | 固定条件 | 应看到的变化 | 不能据此声称 |
+| --- | --- | --- | --- |
+| 串行 vs 并行 | 同jobs、依赖和虚拟耗时 | 9→7，完成顺序改变 | 真实p95降低或质量提高 |
+| 无截止时间 vs 6 | 同并行任务 | completed→partial，合同timeout | 其他角色可代替合同通过 |
+| 合同有/无预算依赖 | 同输入快照 | 开始时间3→0 | 删除依赖仍语义正确 |
+| 两异证据 vs 同发现 | 同S28A合并器 | 两条finding与conflict→一条 | 多数票可选择正确制度 |
+
+实验入口与验收口径：[第26章P200/P300数据与规则](26-项目实战二：ProcureAgent审查系统.md)、[单Agent与多Agent实验规格](../project-practice/项目实践规格.md#单-agent-与多-agent)、[同题同预算的对照约束](../project-practice/评测与故障演练.md#对照实验约束)、[W12–W14验收清单](附录E-项目里程碑与交付检查.md)。仓库没有现成的多Agent一键基准程序；2.4是可独立运行的调度与退出入口，质量/费用对照要按上述规格接入第26章材料，不能把这段虚拟耗时报告当实测。
+
+**判定对错：** 同依赖下并行结果不早于串行、截止后为partial、超时角色有事件、冲突合并不随顺序变化，才算通过；角色全部返回但合并丢证据，或只看平均耗时，均不通过。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 并行度增加后，完成顺序不能参与业务结论
@@ -162,11 +246,19 @@ asyncio.run(main())
 
 ### 本章累计任务：用基线约束多角色
 
-在同一批采购题上比较单流程/单Agent与专家分工，注入一次合同超时并反转完成顺序。提交共同输出契约、逐题结果和`multi_agent_comparison.json`，记录质量、调用数、token、延迟与复核率；总预算和返工轮次受限。材料复用[第26章](26-项目实战二：ProcureAgent审查系统.md)，评测口径见[第22章](22-AI评测、提示注入、追踪与成本.md)。
+把2.4代码复制为`28_schedule_probe.py`，先运行`uv run --frozen python 28_schedule_probe.py`，确认串行9、并行7、截止6时partial。这个文件是独立离线入口，不需要模型或额外依赖；虚拟耗时只验证调度与退出，不写入真实性能结论。
+
+再在同一批P200/P300采购题上完成五组受控对照：固定流程、单Agent、串行专家、并行专家、有限评审。材料复用[第26章](26-项目实战二：ProcureAgent审查系统.md)，实验规格见[单Agent与多Agent](../project-practice/项目实践规格.md#单-agent-与多-agent)，公平口径见[对照实验约束](../project-practice/评测与故障演练.md#对照实验约束)，里程碑见[W12–W14清单](附录E-项目里程碑与交付检查.md)。
+
+1. 冻结输入快照、身份、日期、模型、提示、工具和总预算；先保存固定流程与单Agent基线。
+2. 每次只改分工、并行或评审中的一项。注入合同超时、预算依赖和旧制度证据，再用S28A反转完成顺序，保存局部状态与冲突。
+3. 提交共同输出契约和`multi_agent_comparison.json`：每组保留逐题正确/错误/未完成、发现与证据、调用数、token/费用、p50/p95、最坏耗时、复核率、退出原因和采用/回退决定。零分母写N/A，失败与重试不能删除。
 
 ## 6. 验收与自测
 
-**验收产物：** 一份`multi_agent_comparison.json`。每个案例包含基线结果、分工结果、完成顺序、局部失败、用量和是否采用；另附一次顺序反转后结果不变的轨迹。
+**验收产物：** `28_schedule_probe.py`的实际输出，以及一份`multi_agent_comparison.json`。每个案例包含基线结果、分工结果、完成顺序、局部失败、用量和是否采用；另附一次顺序反转后结果不变的轨迹。
+
+**判定对错：** 离线探针应得到9/7/partial；五组对照必须同题同预算，合同超时不能判整体完成，冲突不能投票消失。只用虚拟耗时宣称性能提升、或只交一份多角色成功截图，均不通过。
 
 ### 6.1 先预测，再查看参考推导
 

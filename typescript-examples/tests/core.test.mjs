@@ -46,7 +46,7 @@ test("已知事件严格校验；未知事件名可跳过", () => {
   assert.equal(parseStreamEvent("heartbeat", "not json"), null);
   for (const [name, body] of [["done", { answerId: "A" }], ["citation", { sourceId: "x" }],
     ["error", { message: "x", retryable: "true" }]]) {
-    assert.throws(() => parseStreamEvent(name, JSON.stringify(body)));
+    assert.throws(() => parseStreamEvent(name, JSON.stringify(body)), new RegExp(`${name}.*载荷不合法`));
   }
 });
 test("done后取消剩余流，不接受迟到token", async () => {

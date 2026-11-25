@@ -8,8 +8,8 @@
 
 **本章任务卡**
 
-- **接收：** 第18–20章的文档、权限与检索能力，以及第21–22章的逐题评测口径。
-- **只新增：** 从空文件累计的规范化、分块、过滤检索、引用回答核心，再以适配器接HTTP与持久化。
+- **接收：** 第19章已写入的步骤1–6规范化与分块、第20章的步骤7–12过滤检索（同一份`learner_docpilot.py`），以及第21–22章的逐题评测口径。
+- **只新增：** 补齐步骤13–20的引用回答核心，再以适配器接HTTP与持久化。
 - **交付：** `learner_docpilot.py`、20步契约结果、HTTP请求记录和可重启查询的持久化适配器。
 - **验收：** 四段代码依次拼接通过20步契约；HTTP不重写业务；换租户、日期和新资料仍正确；来源打开与查询继续受权限约束。
 
@@ -73,6 +73,59 @@ Document保存来源、租户、版本、权限与生效区间；Chunk保存正�
 
 演示证据是一条可复跑的批次：命令与环境、固定请求、各阶段产物、20步结果、HTTP状态及重启前后查询。截图只辅助说明，不能替代原始输出；正常、无证据、旧版、越权与故障至少各一条，并明确哪些尚未验证。
 
+### 2.4 用三条请求走查版本、租户与引用边界
+
+在接入HTTP前，先用一份三文档小数据回答“过滤到底排除了谁”。输入是来源列表、可信租户和业务日期；步骤是按租户与左闭右开区间过滤，再为每个片段保留稳定ID和码点偏移；输出是本次可见片段及可回查的引用位置。
+
+```python
+import json
+
+documents = [
+    {"tenant": "a", "source": "policy", "version": "v1", "valid_from": "2026-01-01",
+     "valid_to": "2026-07-01", "text": "预付款上限30%。"},
+    {"tenant": "a", "source": "policy", "version": "v2", "valid_from": "2026-07-01",
+     "valid_to": None, "text": "预付款上限20%。"},
+    {"tenant": "b", "source": "policy", "version": "v2", "valid_from": "2026-07-01",
+     "valid_to": None, "text": "预付款上限10%。"},
+]
+
+def visible_chunks(rows, tenant, as_of):
+    result = []
+    for row in rows:
+        if row["tenant"] != tenant:
+            continue
+        if row["valid_from"] > as_of or (row["valid_to"] is not None and as_of >= row["valid_to"]):
+            continue
+        result.append({"chunk_id": f'{row["tenant"]}:{row["source"]}:{row["version"]}:0',
+                       "version": row["version"], "text": row["text"], "start": 0,
+                       "end": len(row["text"])})
+    return sorted(result, key=lambda item: item["chunk_id"])
+
+def locate(evidence, chunk_id, quote):
+    item = next((row for row in evidence if row["chunk_id"] == chunk_id), None)
+    if item is None:
+        raise ValueError("引用不在本次证据中")
+    start = item["text"].find(quote)
+    if start < 0:
+        raise ValueError("引文不在来源正文中")
+    return {"source_id": "policy", "version": item["version"],
+            "start": item["start"] + start, "end": item["start"] + start + len(quote)}
+
+current = visible_chunks(documents, "a", "2026-07-01")
+assert [item["version"] for item in current] == ["v2"]
+assert visible_chunks(documents, "a", "2026-06-30")[0]["version"] == "v1"
+assert visible_chunks(documents, "b", "2026-07-01")[0]["text"] == "预付款上限10%。"
+assert visible_chunks(documents, "c", "2026-07-01") == []
+citation = locate(current, "a:policy:v2:0", "20%")
+assert citation == {"source_id": "policy", "version": "v2", "start": 5, "end": 8}
+print(json.dumps({"visible": [item["chunk_id"] for item in current], "citation": citation},
+                 ensure_ascii=False, sort_keys=True))
+```
+
+预期`visible`只有`a:policy:v2:0`，引用为`policy/v2`且`start=5,end=8`。三个断言分别验证生效日切换、另一租户使用自己的数据和未知租户返回空。失败分界也很清楚：列表为空先查租户/日期；ID存在但quote找不到，是引用校验失败，不能改成模糊匹配后放过。码点偏移只对规范化文本有效，接PDF时必须另做页码映射。
+
+**判定对错：** 7月1日只见v2、6月30日只见v1、跨租户不串用且越界引用报错，才算通过；只在最终回答里删除越权文本不算通过。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 有损转换需要逐阶段验证
@@ -83,14 +136,14 @@ Document保存来源、租户、版本、权限与生效区间；Chunk保存正�
 
 ## 4. 示例与逐步走查
 
-### 4.1 从空文件开始同一查询
+### 4.1 在已有产物上补齐步骤13–20
 
-新建 `learner_docpilot.py`。四段累计代码依次写入同一文件，后段调用前段函数，不能当作独立示例。统一问题是“预付款比例是多少”，统一检查租户a在2026-07-01的可见证据。
+继续第19–20章的 `learner_docpilot.py`：步骤1–6规范化与分块、步骤7–12过滤检索应已在文件中，本章补齐步骤13–20的引用回答。4.2–4.3列出前12步完整代码供对照巩固，已实现的部分以自己的模块为准，不必重写。四段累计代码依次写入同一文件，后段调用前段函数，不能当作独立示例。统一问题是“预付款比例是多少”，统一检查租户a在2026-07-01的可见证据。
 
-先实现并预测每步结果，再运行到当前步骤号：
+先回归前12步，再从步骤13逐步推进到20：
 
 ```powershell
-uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module learner_docpilot --through-step 1 -q
+uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module learner_docpilot --through-step 12 -q
 ```
 
 较后步骤显示deselected，不是通过。参考模块只能证明验收器可用，自己的完成证据必须保留实际模块名。[完整契约与失败定位](../../tests/learner/练习说明.md)
@@ -214,14 +267,17 @@ def answer(index, question, *, tenant_id, as_of, model):
             raise ValueError("duplicate citation")
         seen.add((chunk_id, quote))
         chunk = by_id[chunk_id]
+        quote_start = chunk["text"].find(quote)
         citations.append({**citation, "source_id": chunk["source_id"], "version": chunk["version"],
-                          "start": chunk["start"], "end": chunk["end"]})
+                          "start": chunk["start"], "end": chunk["end"],
+                          "quote_start": chunk["start"] + quote_start,
+                          "quote_end": chunk["start"] + quote_start + len(quote)})
     if not citations and not generated["needs_review"]:
         raise ValueError("uncited answer must require review")
     return {"answer": text, "citations": citations, "needs_review": generated["needs_review"]}
 ```
 
-20步通过只证明输入输出与失败分支符合约定，不证明真实语义检索、引用支持结论、HTTP入口认证或生产性能。
+20步通过只证明输入输出与失败分支符合约定，不证明真实语义检索、引用支持结论、HTTP入口认证或生产性能。输出中的 `start/end` 是整个命中 chunk 在规范化文档里的区间；`quote_start/quote_end` 才是逐字引用片段的位置。二者都按码点计数，所以原文切片 `document["text"][quote_start:quote_end]` 应恰好等于 quote。消费方需要展示高亮时使用后者，需要回看完整上下文时使用前者。
 
 ### 4.5 将同一个核心接到HTTP，而不是重写业务
 
@@ -253,9 +309,9 @@ uv run --frozen --group web uvicorn practice.learning_projects.service:create_ap
 
 ## 5. 动手练习
 
-### 本章累计任务：从空文件完成DocPilot核心与适配
+### 本章累计任务：补齐步骤13–20并完成适配
 
-按4.2–4.4写自己的模块，逐步通过20步契约；用一份新资料和另一组日期重做。再按4.5接HTTP、按4.6接持久化，保存正常、无证据、旧版、越权和重启后的查询记录。
+先回归第19–20章的步骤1–12，再按4.4补齐步骤13–20，通过20步契约；用一份新资料和另一组日期重做。再按4.5接HTTP、按4.6接持久化，保存正常、无证据、旧版、越权和重启后的查询记录。
 
 **未通过时怎样定位：** 参考基线通过不是自己的证据；引用位置正确不证明语义支持；内存HTTP通过不证明持久化；教学令牌不是真实登录。
 
@@ -263,7 +319,9 @@ uv run --frozen --group web uvicorn practice.learning_projects.service:create_ap
 
 ## 6. 验收与自测
 
-**验收命令与产物：** 运行 `uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module learner_docpilot -q`，应20项通过；再交付一条HTTP正常请求、一条越权请求和一条持久化写入后重启仍可查的记录。
+**验收命令与产物：** 运行 `uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module learner_docpilot -q`，应20项通过；运行2.4探针，确认7月1日仅见v2、6月30日仅见v1，引用偏移为5–8。再交付一条HTTP正常请求、一条越权请求和一条持久化写入后重启仍可查的记录。
+
+**判定对错：** 契约、日期边界、租户隔离和引用定位分别通过才通过；最终文本删掉越权内容但候选仍串租户，不通过。
 
 <details>
 <summary>完成预测后查看解释</summary>

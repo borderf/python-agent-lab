@@ -29,8 +29,8 @@ Vitest + Playwright            测试
 
 | 部分 | 章节 | 交付物 |
 | --- | --- | --- |
-| 0 迁移 | 0. Java 后端到 TypeScript：心智模型与工具链 | 一个能跑 `tsc --noEmit`、Vitest 和 pnpm 的最小仓库 |
-| 1 类型、异步与流式 | 1–4 类型/校验；5 异步/取消；6 HTTP/SSE | DocPilot API 类型、Zod 校验、流式客户端 |
+| 0 准备 | 导读与附录D：Java 后端到 TypeScript 的最小基础 | 一个能跑 `tsc --noEmit` 和 pnpm 的最小仓库 |
+| 1 类型、异步与流式 | 1–4 类型/校验；5 异步/取消；6 HTTP/SSE | DocPilot API 类型、手写运行时校验、流式客户端 |
 | 2 工程化与界面 | 7 模块/构建；8 React 组件；9 异步数据；10 流式界面 | 搜索页、回答页、引用与待复核、流式渲染 |
 | 3 BFF、数据与 AI | 11 Hono BFF；12 SQL/Drizzle；13 认证/多租户；14 AI SDK/工具/MCP | 可登录、可持久化、可调用模型的 BFF |
 | 4 测试与交付 | 15 Vitest；16 Playwright；17 观测/成本/安全；18 部署与 Capstone | 可部署、可演示、可答辩的 DocPilot Console |
@@ -51,7 +51,7 @@ Vitest + Playwright            测试
 | `ExecutorService`/线程池 | 事件循环 + Promise | 阻塞调用会卡住整个 loop；CPU 工作放 Worker |
 | `CompletableFuture` | `Promise`/`async` | 取消是协作的；Promise 本身不可取消 |
 | Maven/Gradle | pnpm + `package.json`/lockfile | lockfile 必须提交；依赖版本要可复现 |
-| JUnit/MockMvc | Vitest/supertest/Playwright | 单测、契约、端到端分层，不靠一个工具全包 |
+| JUnit/MockMvc | Node test/supertest/Playwright（Vitest 可选） | 单测、契约、端到端分层，不靠一个工具全包 |
 | `application.yml` | 环境变量 + 配置模块 | 密钥不进前端；启动时校验配置 |
 | checked exception | `throw`/`Result` | TS 没有 checked exception；错误类型要自己建模 |
 
@@ -59,14 +59,14 @@ Vitest + Playwright            测试
 
 ### 阶段 1：类型与运行时（第 1–4 章，约 2 周）
 
-- 把 Java 的 DTO/枚举/校验器改写成 TS 类型 + Zod；
+- 把 Java 的 DTO/枚举/校验器改写成 TS 类型 + 手写运行时校验（Zod 可选，主线不依赖）；
 - 写 `Result<T,E>`、错误分类和字段路径；
 - 每天一个 20 行类型练习，必须跑 `tsc --noEmit`；
 - 交付：DocPilot 的 `SearchHit`、`Answer`、`ApiError` 类型与校验。
 
 ### 阶段 2：异步、SSE 与工程化（第 5–7 章，约 2 周）
 
-- 建 pnpm 仓库、`tsconfig`、ESM、Vitest；
+- 建 pnpm 仓库、`tsconfig`、ESM、Node 测试运行器（Vitest 可选，未入主线锁文件）；
 - 用 `fetch` + `AbortController` 写 API 客户端；
 - 把 SSE 解析拆成纯函数并写跨 chunk 测试；
 - 交付：命令行版 DocPilot 客户端，能流式打印并中止。
@@ -106,7 +106,7 @@ Vitest + Playwright            测试
 - **不要用 `any` 快速移植 Java 代码**。先写 `unknown` + 校验，再逐步收窄；`any` 会把迁移问题推迟到运行时。
 - **不要把 TypeScript 类型当 Bean Validation**。类型在编译后消失；外部输入必须运行时校验。
 
-## 六、与现有六章的关系
+## 六、与现有十八章的关系
 
 当前第 1–18 章已完成：类型/异步/SSE（1–6）、工程化/React/流式界面（7–10）、Hono BFF/SQL/认证/AI 工具（11–14）、测试/观测/部署（15–18）。下一步不是继续加章节，而是按阶段做一次真实交付：
 

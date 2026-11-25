@@ -45,7 +45,12 @@ function toggleRead() {
 onMounted(() => {
   try { storage = window.localStorage; state.value = readProgress(storage) } catch { /* Private storage may be unavailable. */ }
   fontChanged()
-  remember()
+  const bookmark = state.value.last
+  if (bookmark?.path === currentPath.value && bookmark.scroll > 0) {
+    window.requestAnimationFrame(() => window.scrollTo({ top: bookmark.scroll, behavior: 'instant' }))
+  } else {
+    remember()
+  }
   window.addEventListener('scroll', scroll, { passive: true })
   window.addEventListener('pagehide', remember)
 })

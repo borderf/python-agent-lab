@@ -82,6 +82,84 @@ else:
 
 HTTP重连、会话恢复和请求重放是不同问题；只有协议与服务端明确支持时才复用会话，已发送写请求仍须按动作键确认结果。
 
+### 2.4 沿着一条JSON-RPC消息看清请求、响应与错误
+
+以下用MCP的一次只读调用展示协议外壳，版本字段是示例值，实际必须与Server协商。输入是Client方法与参数；步骤依次为initialize协商、initialized通知、tools/list发现、tools/call执行；输出是对应id的result或error。请求发出后超时则是“本地未知”，不能伪造一条error响应。
+
+**① 初始化请求：** Client声明协议版本与自身能力。
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"docpilot-learner","version":"1.0"}}}
+```
+
+**② 初始化响应：** Server返回协商版本、能力与身份；随后Client发送不带id的`initialized`通知。
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"procure-tools","version":"1.0"}}}
+```
+
+**③ 正常工具调用与响应：** `tenant-a`来自已认证连接，不出现在模型参数中；`structuredContent`是本实验约定的结构化结果，Client仍要按自身输出契约校验。
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_prepayment_limit","arguments":{"as_of":"2026-10-01"}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\"limit_percent\":20,\"source_id\":\"policy-a-current\"}"}],"structuredContent":{"limit_percent":20,"source_id":"policy-a-current"},"isError":false}}
+```
+
+**④ 参数错误与业务拒绝：** 多传`tenant_id`属于参数不合法；即使参数合法，另一租户来源也由Server授权拒绝。错误中的id必须与请求相同，内部堆栈和资源存在性不能泄露。
+
+```json
+{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Invalid arguments","data":{"stable_code":"INVALID_ARGUMENTS"}}}
+```
+
+| 边界 | 输入/观察 | 输出 | 何时失败 | 验收 |
+| --- | --- | --- | --- | --- |
+| 发现 | tools/list响应 | 当前身份可见工具清单 | 断连或版本不兼容 | 清单不含未授权能力 |
+| 参数 | tools/call参数 | result或-32602 | 业务调用前 | 坏参数调用次数为0 |
+| 授权 | 连接身份、来源URI | 稳定业务拒绝 | Server资源检查 | 另一租户内容为零 |
+| 发送后未知 | 已发出但超时/断连 | `EFFECT_UNKNOWN` | 无法证明远端状态 | 写操作先对账，不盲重放 |
+| 清理 | 客户端关闭 | 子进程/会话终止 | 退出等待超时 | stdout无日志污染，资源回收 |
+
+把上述分类做成离线判定器，便于在真实SDK实验前统一错误码：
+
+```python
+def classify_failure(stage, error_code=None):
+    if stage == "validation":
+        if error_code != -32602:
+            raise ValueError("参数错误必须映射到-32602")
+        return {"stable_code": "INVALID_ARGUMENTS", "retry": "none", "business_attempts": 0}
+    if stage == "authorization":
+        return {"stable_code": "PERMISSION_DENIED", "retry": "none", "business_attempts": 0}
+    if stage == "before_send":
+        if error_code == -32601:
+            return {"stable_code": "METHOD_NOT_FOUND", "retry": "none", "business_attempts": 0}
+        return {"stable_code": "TRANSPORT_UNAVAILABLE", "retry": "bounded_reinitialize",
+                "business_attempts": 0}
+    if stage == "after_send":
+        return {"stable_code": "EFFECT_UNKNOWN", "retry": "read_only_or_reconcile",
+                "business_attempts": "unknown"}
+    raise ValueError("未知失败阶段")
+
+assert classify_failure("validation", -32602) == {
+    "stable_code": "INVALID_ARGUMENTS", "retry": "none", "business_attempts": 0}
+assert classify_failure("authorization")["stable_code"] == "PERMISSION_DENIED"
+assert classify_failure("before_send", -32601)["retry"] == "none"
+assert classify_failure("after_send")["retry"] == "read_only_or_reconcile"
+try:
+    classify_failure("validation", -32601)
+except ValueError:
+    pass
+else:
+    raise AssertionError("方法不存在不能冒充参数错误")
+print(classify_failure("after_send"))
+```
+
+预期最后一行输出为`{'stable_code': 'EFFECT_UNKNOWN', 'retry': 'read_only_or_reconcile', 'business_attempts': 'unknown'}`。参数错误在业务调用前停止且不重试；授权失败不泄露资源；发送前断连可有界重建连接；发送后未知只能对只读调用重试或对写调用按动作键核对。`business_attempts="unknown"`是关键：本地没有回执，不代表Server没有执行。最后一段测试确认`-32601`不能被静默映射成参数错误。
+
+**判定对错：** 正常结果与本地函数一致、坏参数零调用、越权零内容、发送后未知不盲重放且连接清理，五项齐全才通过；只验证一次正常tools/call不通过。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 协议统一交互外壳，业务语义仍要显式映射
@@ -126,7 +204,7 @@ assert result["other_tenant_hidden"]
 print(json.dumps(result, ensure_ascii=False))
 ```
 
-预期JSON中的工具清单只含两个只读能力，且三个布尔检查均为true。这个实验固定使用`tenant-a`教学身份，不能直接当作多用户认证实现。
+预期JSON中的工具清单只含两个只读能力，且三个布尔检查均为true。这个实验固定使用`tenant-a`教学身份，不能直接当作多用户认证实现。此代码块保留为`framework-example`，本次文档修改未验证外部SDK运行；必须安装`mcp`依赖组并执行6节命令后，才能把结果写成实测。
 
 #### 案例推进：第三步，用同一组反例检查协议边界
 
@@ -154,6 +232,8 @@ uv run --frozen --group mcp python -m practice.integration_labs.mcp_client
 ```
 
 预期输出可解析JSON，`local_equal`、`identity_injection_rejected`和`other_tenant_hidden`均为true，进程正常退出。
+
+**判定对错：** 三个布尔均为true且子进程正常清理才通过；只展示tools/list、把参数Schema当授权，或未实跑却写“已验证”，均不通过。
 
 ### 6.1 先预测，再查看参考推导
 

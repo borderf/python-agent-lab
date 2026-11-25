@@ -1,7 +1,7 @@
-"""Check both learning tracks and their explicitly selected local exercises.
+"""Check independent learning tracks and their explicitly selected local exercises.
 
 The existing textbook checker validates repository-wide Markdown links.
-This tool adds structure/syntax for the independent books and exercises.
+This tool adds structure/syntax for the books and exercises.
 """
 
 import argparse
@@ -12,14 +12,23 @@ import re
 import subprocess
 import sys
 
-from verify_textbook import verify as verify_original
+from verify_textbook import details_boundary_errors, verify as verify_original
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BOOKS = ("architecture-book", "product-founder-book")
+BOOKS = {
+    "architecture-book": (14, "A"),
+    "product-founder-book": (14, "P"),
+    "typescript-book": (18, None),
+    "ai-foundations": (9, None),
+}
 SECTION_NAMES = (
     "目标、前置与问题", "概念与基础", "机制与推导", "案例逐步推演",
     "分层练习", "自测与参考推导", "项目交付与验收", "迁移与阅读",
+)
+DELIVERY_SECTION_NAMES = (
+    "学习目标与前置知识", "基础知识讲解", "原理讲解与推导", "示例与逐步走查",
+    "练习", "验收与自测", "面试问答与参考回答", "本章小结与参考",
 )
 EXERCISES = (
     "practice/enterprise_ai/retrieval_baseline.py",
@@ -38,23 +47,32 @@ def main() -> int:
     chapters_by_book = {}
     examples = []
     example_ids = set()
-    for name in BOOKS:
+    for name, (chapter_count, example_prefix) in BOOKS.items():
         folder = ROOT / "docs" / name
         chapters = sorted(p for p in folder.glob("[0-9][0-9]-*.md")
                           if not p.name.startswith("00-"))
         chapters_by_book[name] = len(chapters)
-        if [int(p.name[:2]) for p in chapters] != list(range(1, 15)):
-            failures.append(f"{name}: expected unique chapters 01-14")
+        if [int(p.name[:2]) for p in chapters] != list(range(1, chapter_count + 1)):
+            failures.append(f"{name}: expected unique chapters 01-{chapter_count:02d}")
         for path in folder.glob("*.md"):
             text = path.read_text(encoding="utf-8")
             if text.count("```") % 2:
                 failures.append(f"{path.name}: unmatched code fence")
+            failures.extend(
+                f"{path.name}: {error}"
+                for error in details_boundary_errors(text)
+            )
             if path not in chapters:
                 continue
-            expected = [(str(i), title) for i, title in enumerate(SECTION_NAMES, 1)]
+            section_names = SECTION_NAMES if example_prefix else DELIVERY_SECTION_NAMES
+            expected = [(str(i), title) for i, title in enumerate(section_names, 1)]
+            if name == "ai-foundations" and path.name.startswith("09-"):
+                expected[1] = ("2", "固定输入")
+                expected[2] = ("3", "逐层观察")
+                expected[3] = ("4", "一张表复述全链")
             if re.findall(r"^## (\d+)\. (.+)$", text, re.M) != expected:
                 failures.append(f"{path.name}: section structure")
-            if text.count("<details>") != 1 or text.count("</details>") != 1:
+            if example_prefix and (text.count("<details>") != 1 or text.count("</details>") != 1):
                 failures.append(f"{path.name}: self-check")
             subsections = re.findall(r"^### (\d+\.\d+) ", text, re.M)
             if len(subsections) != len(set(subsections)):
@@ -64,13 +82,14 @@ def main() -> int:
                     ast.parse(code, filename=str(path))
                 except SyntaxError as error:
                     failures.append(str(error))
-                marker = re.search(r"^# track-example: ([AP]\d{2})$", code, re.M)
-                if marker:
-                    identifier = marker.group(1)
-                    if identifier in example_ids:
-                        failures.append(f"duplicate track example: {identifier}")
-                    example_ids.add(identifier)
-                    examples.append((f"{name}:{identifier}", code))
+                if example_prefix:
+                    marker = re.search(rf"^# track-example: ({example_prefix}\d{{2}})$", code, re.M)
+                    if marker:
+                        identifier = marker.group(1)
+                        if identifier in example_ids:
+                            failures.append(f"duplicate track example: {identifier}")
+                        example_ids.add(identifier)
+                        examples.append((f"{name}:{identifier}", code))
     for area in ("enterprise_ai", "architecture_labs", "product_labs", "integration_labs"):
         for path in (ROOT / "practice" / area).rglob("*.py"):
             try:

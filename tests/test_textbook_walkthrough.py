@@ -24,7 +24,7 @@ def test_cumulative_docpilot_textbook_code_meets_contract():
 
 def test_cumulative_agent_textbook_code_meets_contract():
     path = next((ROOT / "docs/python-book").glob("24-*.md"))
-    text = path.read_text(encoding="utf-8").split("### 4.2 从零 12 步", 1)[1].split("## 5. 动手练习", 1)[0]
+    text = path.read_text(encoding="utf-8").split("### 4.2 从零 12 步", 1)[1].split("### 4.3", 1)[0]
     blocks = re.findall(r"```python\n(.*?)```", text, re.S)
     assert len(blocks) == 4, "Four cumulative agent checkpoints must stay explicit"
     implementation = ModuleType("agent_walkthrough")

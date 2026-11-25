@@ -40,7 +40,7 @@ event: done
 data: {"answerId":"A1","needsReview":true}
 ```
 
-一条事件由若干 `field: value` 行组成，空行分隔事件。`data:` 后是一个空格，内容可能跨多行；`:` 开头是注释；`[DONE]` 是某些 API 的结束标记，不是 SSE 标准。解析器要按行缓冲，不能在任意 chunk 边界直接 `split("\n")` 后丢弃半行。
+一条事件由若干 `field: value` 行组成，空行分隔事件。`data:` 后可有一个可选空格，内容可能跨多行；`:` 开头是注释；`[DONE]` 是某些 API 的结束标记，不是 SSE 标准。解析器要按行缓冲，不能在任意 chunk 边界直接 `split("\n")` 后丢弃半行。
 
 ### 2.3 字节、行与事件分开处理
 
@@ -124,6 +124,62 @@ Ollama 写 NDJSON 行
 
 当前 /api/answer 只是独立模型协议演示，问题没有经过 RAG，也没有已验证引用。工具事件只转发，客户端暂时忽略；参数分片组装和工具执行仍属于第14章扩展。
 
+### 2.6 半行、空行与 EOF 的处理对照
+
+`createSseParser` 接收的是已经解码好的完整行，不负责切字节；`readStream` 才负责增量解码和组行。把两者混用，容易出现重复解码或丢掉半行。
+
+```ts
+import { createSseParser, type SseEvent } from "../../typescript-examples/src/sse.js";
+
+const events: SseEvent[] = [];
+const parseLine = createSseParser((event) => events.push(event));
+parseLine(": ping");       // 注释
+parseLine("data: first");
+parseLine("data:  second"); // 只去掉冒号后的一个空格
+parseLine("");             // 空行派发
+console.log(events);
+```
+
+**预期输出**为 `[ { event: 'message', data: 'first\n second' } ]`。没有 `event:` 行时使用默认事件名 `message`；两行 `data` 用换行连接。相对导入路径以本章 Markdown 所在目录为基准，实际放进配套源码树时应按项目位置调整，不要照抄到无关目录。
+
+边界对照：
+
+| 输入结尾 | `readStream` 的行为 | 应用层应如何判断 |
+| --- | --- | --- |
+| 最后是完整空行 | 已派发事件 | 还需检查 done/error 终止语义 |
+| 最后只有 `data: x\n` | EOF 不伪造空行，未派发该事件 | `streamAnswer` 会因没有终止事件拒绝 |
+| 最后以 `\r` 结束 | EOF 最终刷新时按完整换行处理 | 不能提前把末尾 CR 当作半行丢弃 |
+| UTF-8 字节不完整 | `fatal: true` 解码失败 | 保留原始失败，不输出替换字符冒充成功 |
+
+编译/运行过程：先对导入的源码做类型检查，再运行转译后的模块。常见错误是每个网络 chunk 单独 `split("\n")` 并把最后一段当完整行；或自己再 `TextDecoder.decode` 一次，把 `readStream` 已解码的字符串传给解码器。
+
+### 2.7 三种响应读取形式对照
+
+| 调用 | 返回类型 | 适用场景 | 边界 |
+| --- | --- | --- | --- |
+| `await response.json()` | `Promise<any>` | 已知是 JSON 的 2xx 响应 | 空体、HTML、非法 JSON 会拒绝 |
+| `await response.text()` | `Promise<string>` | 先读错误体或需要原始文本 | 大响应会整段驻留内存 |
+| `response.body?.getReader()` | `ReadableStreamDefaultReader<Uint8Array> \| null` | SSE、文件下载等增量读取 | `null` 表示没有可读 body，需要显式处理 |
+
+```ts
+async function inspectResponses(): Promise<void> {
+  const ok = new Response('{"items":[]}', { status: 200 });
+  const bad = new Response("<html>missing</html>", { status: 404 });
+  console.log(ok.ok, await ok.json());
+  console.log(bad.ok, (await bad.text()).slice(0, 4));
+}
+void inspectResponses();
+```
+
+**预期输出**：
+
+```text
+true { items: [] }
+false <htm
+```
+
+执行过程：`Response` 可由浏览器或 Node 的全局 API 构造；先 `pnpm exec tsc --noEmit` 检查 DOM 库，再运行转译代码。这个例子只验证读取形式，没有发网络请求。常见错误是先 `json()` 再检查 `ok`，把 HTTP 404 错报成 JSON 解析错；或对一个 `Response` 连续调用两次 `json()`/`text()`，第二次会因 body 已使用而失败。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 流式响应的失败边界
@@ -152,6 +208,30 @@ SSE 的 `data` 是字符串；`JSON.parse` 后是 `unknown`；必须用第 4 章
 按顺序走查：检查HTTP与媒体类型→解码并组装事件→校验载荷→通知调用方→检查终止。done结束时取消剩余读取；error先通知界面，再以StreamFailure拒绝Promise；无终止事件的EOF也拒绝。坏事件错误包含事件序号，不把敏感data原文放进提示。
 
 调用方不重复把error记录成两次失败：reducer进入error终态后忽略后续错误动作。身份与来源语义仍由服务端验证，客户端校验不承担授权。
+
+下面的调用使用本地 `Response`，不依赖不存在的端点：
+
+```ts
+import { streamAnswer, StreamFailure } from "../../typescript-examples/src/stream-client.js";
+
+async function inspectStream(): Promise<void> {
+  const response = new Response(
+    'event: token\ndata: {"text":"预付款"}\n\n' +
+    'event: done\ndata: {"answerId":"A1","needsReview":true}\n\n',
+    { headers: { "Content-Type": "text/event-stream" } },
+  );
+  try {
+    await streamAnswer("fixture", {}, (event) => console.log(event.type), new AbortController().signal,
+      async () => response);
+  } catch (error) {
+    if (error instanceof StreamFailure) console.log(error.message, error.retryable);
+    else throw error;
+  }
+}
+void inspectStream();
+```
+
+**预期输出**为 `token`、`done` 两行。注入的 fetcher 仍使用 `typeof fetch` 的调用形式，只是忽略 URL 并返回夹具。若删除末尾 done 事件，Promise 会以 `流在done/error之前结束` 拒绝，且 `retryable` 为 `true`；但“可重试”只是协议标记，不代表浏览器应无条件自动重跑，仍需结合已显示内容和费用决定。
 
 ## 5. 练习
 

@@ -58,6 +58,8 @@ assert result == {"status": "needs_review", "findings": ["OVER_BUDGET"],
 
 采购工具注册表与第24章订单注册表分开，避免破坏“恰好两个订单工具”的旧契约。每轮依次做模型提议、参数校验、可信身份下执行、结果回填；未知工具和坏参数在业务调用前拒绝，步数与时限要有上限。
 
+本章离线基线使用 `get_project/get_supplier/get_prepayment_limit` 三个工具名（S26B与S26D一致）；[附录E W08](附录E-项目里程碑与交付检查.md#w08procureagent-手写单-agent)的规格命名是 `search_policy/get_project/query_supplier/check_rules`，对应关系为 search_policy→get_prepayment_limit、query_supplier→get_supplier、check_rules→确定性规则复算。两套命名不混用，迁移时保持同一轨迹验收。
+
 ### 2.4 批准、幂等与恢复各自解决一个窗口
 
 批准绑定报告版本与载荷摘要；修改载荷后旧批准失效。拒绝、过期或未批准时写入0次。接收方按租户和稳定动作键去重，同键同载荷返回原回执，同键换载荷报冲突。远端提交后本地丢回执时，用原键查询或重试并核对效果数，不能换键盲写。取消等待或关闭连接不等于远端效果已经停止。
@@ -69,6 +71,50 @@ assert result == {"status": "needs_review", "findings": ["OVER_BUDGET"],
 - 同键同载荷可重放已批准动作，同键换载荷必须冲突；批准过期、任务改派或动作已执行都不能悄悄复用旧授权。
 
 UI预览、审批签发和动作执行是三个时刻；只有签发时冻结的快照与执行时重新计算的摘要一致，批准才有效。
+
+### 2.5 把审查完成与业务交付分开验收
+
+P200的规则输入是报价`12000000`分、预算`10000000`分、预付款`25%`、上限`20%`及证书到期日；步骤是先按日期取制度，再分别比较金额、比例与资格；输出是三个风险码和一份带版本报告。报告完成后还要经过批准与外部提交，两条链路不能共用一个“完成”。
+
+| 检查 | 输入 | 通过条件 | 失败分类 |
+| --- | --- | --- | --- |
+| 规则报告 | 项目、供应商、制度版本 | 风险码、缺件与来源齐全 | 事实错误或规则版本错误 |
+| 批准 | 报告版本、载荷摘要、审批人 | 摘要相同、未过期、未撤销 | 未批准或旧批准 |
+| 本地状态 | 任务版本、回执 | 状态转换可解释 | 丢回执不能直接判失败 |
+| 业务效果 | 接收方账本、动作键 | 同键同载荷恰好一条 | 重复、越权或效果未知 |
+| 交付声明 | 上述四类证据 | 每项声明能回查 | 任一关键证据缺失即不验收 |
+
+下面的分类器只处理最后的交付判定，不重新实现采购规则或Agent：
+
+```python
+def delivery_state(*, review_status, approval_valid, local_status, effects):
+    if review_status != "completed":
+        return {"state": "needs_review", "business_complete": False}
+    if not approval_valid:
+        return {"state": "unauthorized_effect" if effects else "blocked",
+                "business_complete": False}
+    if effects == 0:
+        return {"state": "not_written", "business_complete": False}
+    if effects > 1:
+        return {"state": "duplicate_effect", "business_complete": False}
+    if local_status == "completed":
+        return {"state": "verified", "business_complete": True}
+    return {"state": "receipt_missing", "business_complete": False}
+
+common = {"review_status": "completed", "approval_valid": True, "effects": 1}
+assert delivery_state(**common, local_status="unknown") == {
+    "state": "receipt_missing", "business_complete": False}
+assert delivery_state(**common, local_status="completed") == {
+    "state": "verified", "business_complete": True}
+assert delivery_state(**{**common, "approval_valid": False}, local_status="completed")["state"] == "unauthorized_effect"
+assert delivery_state(**{**common, "effects": 2}, local_status="completed")["state"] == "duplicate_effect"
+assert delivery_state(**{**common, "review_status": "needs_review"}, local_status="completed")["state"] == "needs_review"
+print(delivery_state(**common, local_status="unknown"))
+```
+
+预期输出为`{'state': 'receipt_missing', 'business_complete': False}`。远端有效果但本地状态未知时，不能声称交付完成；本地完成且效果为1才是`verified`。效果为2是重复，未批准却有效果为1是严重越权，缺资料即使本地标completed也仍是`needs_review`。验收P200时依次打开规则报告、批准记录、任务快照和effects表，任何一项与另外三项矛盾都要停止交付并定位首次分叉。
+
+**判定对错：** 能用效果账本证明一次合法写入才算业务完成；只看报告、只看本地completed或只重复调用成功，均不通过。
 
 ## 3. 原理讲解与推导
 
@@ -159,6 +205,70 @@ print(json.dumps({"report": report, "trace": trace}, ensure_ascii=False))
 
 预期输出包含三项风险和依次执行的三个工具，轨迹中的来源ID分别为P200、S200和制度来源。若最终文本碰巧正确但轨迹缺工具证据，工具使用仍判失败。把日期改为2026-06-01，应使用旧制度且证书有效，只剩超预算；把项目改为P300，应动态查询其供应商S300，预付款与证书为空并进入`needs_review`。
 
+#### 案例推进：把固定三调用换成最小注册表与决策循环
+
+S26B按固定顺序执行三个调用，步骤已知时够用；要体现“模型提议、程序决定”，最小改法是把工具放进注册表，每轮由模型按已有观察提出一个调用。下面复用同一数据与工具函数，脚本替身按观察结果决定下一步，接真实模型时只替换`scripted_model`。
+
+```python
+# study-example: S26D
+import json
+from practice.enterprise_ai.policy_agent import lookup_limit
+from practice.enterprise_ai.retrieval_baseline import DATA
+
+tenant, as_of = "tenant-a", "2026-10-01"
+data = {name: json.loads((DATA / f"{name}.json").read_text(encoding="utf-8"))
+        for name in ("projects", "suppliers", "policies")}
+
+def only(name, key, value):
+    matches = [row for row in data[name] if row["tenant_id"] == tenant and row[key] == value]
+    if len(matches) != 1:
+        raise LookupError("resource unavailable")
+    return {k: v for k, v in matches[0].items() if k != "tenant_id"}
+
+REGISTRY = {
+    "get_project": (("project_id",), lambda a: only("projects", "project_id", a["project_id"])),
+    "get_supplier": (("supplier_id",), lambda a: only("suppliers", "supplier_id", a["supplier_id"])),
+    "get_prepayment_limit": ((), lambda a: lookup_limit(data["policies"], tenant, as_of)),
+}
+
+def scripted_model(observed):
+    if "get_project" not in observed:
+        return {"type": "tool_call", "name": "get_project", "arguments": {"project_id": "P200"}}
+    if "get_supplier" not in observed:
+        return {"type": "tool_call", "name": "get_supplier",
+                "arguments": {"supplier_id": observed["get_project"]["supplier_id"]}}
+    if "get_prepayment_limit" not in observed:
+        return {"type": "tool_call", "name": "get_prepayment_limit", "arguments": {}}
+    return {"type": "final"}
+
+def run_loop(model, max_steps=4):
+    observed, trace = {}, []
+    for _ in range(max_steps):
+        decision = model(observed)
+        if decision["type"] == "final":
+            return observed, trace
+        name, arguments = decision["name"], decision["arguments"]
+        if name not in REGISTRY or set(arguments) != set(REGISTRY[name][0]):
+            raise ValueError("unknown tool or invalid arguments")
+        observed[name] = REGISTRY[name][1](arguments)
+        trace.append({"tool": name, "arguments": arguments})
+    raise RuntimeError("step budget exhausted")
+
+observed, trace = run_loop(scripted_model)
+assert [item["tool"] for item in trace] == ["get_project", "get_supplier", "get_prepayment_limit"]
+assert observed["get_project"]["supplier_id"] == "S200"
+assert observed["get_prepayment_limit"]["source_id"] == "policy-a-current"
+try:
+    run_loop(lambda o: {"type": "tool_call", "name": "submit_review", "arguments": {}})
+except ValueError:
+    pass
+else:
+    raise AssertionError("unknown tool must fail before execution")
+print(json.dumps({"trace": [item["tool"] for item in trace]}, ensure_ascii=False))
+```
+
+`S26D` 的预期输出为 `{"trace": ["get_project", "get_supplier", "get_prepayment_limit"]}`。每轮先查注册表与参数集合再执行，结果回填后才决定下一步；轨迹验收与S26B一致：三个工具依次真实执行、来源可回查P200/S200/policy-a-current，未知工具（如写动作`submit_review`）在执行前失败且零调用。边界是参数值类型、租户授权与步数/时限预算仍按第24章`execute_tool`与`run`的契约检查，本探针只演示注册表、决策与轨迹；报告结论仍由确定性规则复算，不由循环本身给出。
+
 #### 案例推进：第二步，把报告放进受批准的写入动作
 
 以下直接调用仓库的[审批接收方](../../practice/learning_projects/approval_reference.py)和[恢复参考](../../practice/learning_projects/resume_reference.py)。`approved_hash`是可信批准边界的输入，示例本身不实现登录、签发或撤销。
@@ -222,7 +332,9 @@ with TemporaryDirectory() as directory:
 
 ## 6. 验收与自测
 
-**验收产物：** 上述报告、轨迹和效果数；再运行一次可重复的提示版本比较。
+**验收产物：** 上述报告、轨迹和效果数；轨迹须显示三个工具的真实执行顺序与来源（S26B固定流程或S26D决策循环均可），未知工具零执行；再运行一次可重复的提示版本比较。
+
+**判定对错：** P200三项风险、P300缺件、改载荷零写入、原键恢复后效果1次，四项都有原始记录才通过；报告正确但轨迹缺失，或本地completed但效果数不为1，均不通过。
 
 ### 先为一个真实工具建立可重复的版本比较
 

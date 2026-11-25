@@ -1,7 +1,8 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { SearchPage } from "./search-page.js";
-import type { SearchHit } from "./search-contract.js";
+import { parseSearchHits, type SearchHit } from "./search-contract.js";
+import { isRecord } from "./contracts.js";
 import type { QueryIdentity } from "./query.js";
 import { streamAnswer } from "./stream-client.js";
 import { useStreamingAnswer, type StreamInput } from "./hooks.js";
@@ -23,16 +24,10 @@ async function loadHits(question: string, asOf: string, signal: AbortSignal): Pr
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = typeof payload === "object" && payload !== null
-      && "error" in payload && typeof (payload as { error?: { message?: unknown } }).error?.message === "string"
-      ? (payload as { error: { message: string } }).error.message
-      : `请求失败（${response.status}）`;
-    throw new Error(message);
+    const detail = isRecord(payload) && isRecord(payload.error) ? payload.error.message : undefined;
+    throw new Error(typeof detail === "string" ? detail : `请求失败（${response.status}）`);
   }
-  if (typeof payload !== "object" || payload === null || !("items" in payload) || !Array.isArray(payload.items)) {
-    throw new Error("BFF 返回结构不符合契约");
-  }
-  return payload.items as SearchHit[];
+  return parseSearchHits(payload);
 }
 
 function SourcePanel({ hit }: { hit: SearchHit | null }) {
@@ -66,11 +61,11 @@ function AnswerPanel() {
   return <section aria-label="流式回答">
     <h2>流式回答</h2>
     <p>独立模型协议演示：未接入检索和引用校验，内容需要复核。</p>
-    <label htmlFor="answer-question">问题</label>
+    <label htmlFor="answer-question">流式问题</label>
     <input id="answer-question" value={question} onChange={event => setQuestion(event.target.value)} />
     <button type="button" disabled={Array.from(question.trim()).length < 2} onClick={() => void start()}>开始回答</button>
     <button type="button" disabled={state.status !== "connecting" && state.status !== "streaming"} onClick={stop}>停止</button>
-    <p role="status">{state.status === "streaming" ? "生成中…" : state.status}</p>
+    <p role="status" aria-label="回答状态">{state.status === "streaming" ? "生成中…" : state.status}</p>
     {state.status === "error" && <p role="alert">{state.message}</p>}
     {state.status === "done" && <p>生成完成，需人工复核。</p>}
     <article aria-live="polite" style={{ whiteSpace: "pre-wrap" }}>{state.status === "idle" ? "" : state.text}</article>

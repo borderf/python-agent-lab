@@ -1,4 +1,5 @@
 export const storageKey = 'python-agent-lab:reading:v1'
+const pathIds = ['python', 'application', 'agent', 'architecture', 'product', 'typescript', 'ai-foundations']
 
 function isLessonPath(value) {
   return typeof value === 'string' && /^\/(docs|practice)\/.+\.html$/.test(value)
@@ -13,7 +14,7 @@ export function readProgress(storage) {
     const last = value.last
     return {
       ...empty,
-      pathId: ['python', 'application', 'agent', 'architecture', 'product'].includes(value.pathId) ? value.pathId : empty.pathId,
+      pathId: pathIds.includes(value.pathId) ? value.pathId : empty.pathId,
       font: [16, 17, 19, 21].includes(value.font) ? value.font : empty.font,
       read: Array.isArray(value.read) ? [...new Set(value.read.filter(isLessonPath))] : [],
       last: last && isLessonPath(last.path) && typeof last.title === 'string'

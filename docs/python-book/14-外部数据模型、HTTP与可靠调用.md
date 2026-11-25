@@ -24,6 +24,21 @@
 
 3xx 不是最终业务响应：HTTPX 默认不自动跟随重定向，客户端要显式决定是否跟随；跨主机跳转还要重新检查 Authorization 是否会泄露，以及 POST 是否被改成 GET。重定向次数也计入总预算。
 
+一次最小交换可以固定成下面的请求与响应。重点是逐段读取，而不是把整个响应当成“成功或失败”一个比特。
+
+```http
+GET /orders HTTP/1.1
+Host: orders.example.test
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+[{"id":"A","amount_cents":1990}]
+```
+
+执行过程是：客户端发送方法与目标，服务端返回状态行、头和体；适配器先记录 `status=200`，再把 `Content-Type` 当作解析线索，最后才检查 JSON 列表中的订单字段。预期中间结果为 `method=GET`、`status=200`、`media_type=application/json`、`row_count=1`。边界情况是状态仍为 200，但体变成 HTML 或对象：这时前两步成功，后两步必须分别报解析错误和结构错误，不能返回空订单列表。
+
 ### 2.2 一次响应要穿过四层检查
 
 传输层可能超时或断开；HTTP 层可能返回 500；解析层可能不是合法 JSON；结构层可能返回对象而非订单列表。任何一层失败都不能统一变成 `[]`，因为“没有订单”和“服务坏了”必须可区分。
@@ -31,6 +46,39 @@
 状态成功后仍要检查结构，结构正确后再交给第12章 `build_report` 做字段与业务校验。这样外部适配器不复制金额、状态和去重规则。
 
 外部 DTO 只描述 wire 契约：缺失字段与显式 `null`、未知字段、枚举值、金额单位和时间格式都要分别定义。适配器再把 DTO 转成内部订单；不要直接拿内部严格模型充当所有上游版本的模型，否则契约升级会同时破坏解析和业务。响应大小也应在读取前设上限。
+
+四层检查可以用纯函数看到首个失败位置。输入只包含状态码和响应体，不依赖 HTTPX；四种固定输入对应四种可观察结果。
+
+```python
+import json
+
+def classify(status, body):
+    if 300 <= status < 400:
+        return "redirect_error"
+    if status >= 500:
+        return "http_error"
+    if status >= 400:
+        return "request_error"
+    try:
+        rows = json.loads(body)
+    except ValueError:
+        return "parse_error"
+    if not isinstance(rows, list):
+        return "schema_error"
+    return "ok"
+
+cases = [
+    (500, "<html>down</html>"),
+    (302, "/orders"),
+    (200, "<html>not json</html>"),
+    (200, '{"orders": []}'),
+    (200, '[{"id": "A"}]'),
+]
+for status, body in cases:
+    print(status, classify(status, body))
+```
+
+预期输出依次为 `500 http_error`、`302 redirect_error`、`200 parse_error`、`200 schema_error`、`200 ok`。执行顺序必须先看状态，所以 500 的 HTML 不会被误报为解析错误，3xx 也不会被当成 2xx 去解析；200 的 HTML 才进入 JSON 解析，合法对象再进入列表结构检查。边界是 `ok` 仍只表示信封通过，订单缺字段、金额为布尔值或业务冲突要交给内部模型与 `build_report`，不能在这里返回空列表掩盖问题。
 
 ### 2.3 超时、重试和总预算不是一回事
 
@@ -40,6 +88,26 @@ HTTPX 通常提供 connect/read/write/pool 四类时限：分别约束建连、�
 GET 通常可安全重放，但服务契约仍要确认；写操作超时后远端可能已经成功，必须用幂等键、状态查询或对账，不能直接重复提交。
 
 可重试集合通常包括 408、429 和部分 5xx，例如 502/503/504；501/505 等多半不是临时容量问题。解析失败、结构错误和普通 4xx 不应盲目重试。遇到 `Retry-After` 的秒数或 HTTP 日期，先换算并受总 deadline 限制；无该头时用指数退避加全抖动，例如 `random.uniform(0, min(cap, base * 2**attempt))`，避免多个客户端同时重试。`retries` 表示额外重试次数，总尝试次数为 `retries + 1`；重试写操作还必须复用同一幂等键和载荷。下面的教学适配器只处理超时和 500/502/503/504，408/429 与 `Retry-After` 留给生产策略显式实现。
+
+总预算可以用逻辑时钟观察，避免真实等待造成不稳定。假设任务 deadline 为 10，第一次调用耗时 4，第二次耗时 5，第二次后还要退避 2；第三次开始前预算已经耗尽。
+
+```python
+clock = 0
+deadline = 10
+durations = [4, 5, 2]
+backoff = 2
+for attempt, duration in enumerate(durations, 1):
+    remaining = deadline - clock
+    print("attempt", attempt, "remaining", remaining)
+    if remaining <= 0:
+        break
+    clock += duration
+    if attempt == 2:
+        clock += backoff
+print("budget-left", deadline - clock)
+```
+
+预期输出为 `attempt 1 remaining 10`、`attempt 2 remaining 6`、`attempt 3 remaining -1`、`budget-left -1`。执行过程在每次尝试前重算剩余预算，并把退避计入同一时钟；边界是逻辑时钟只解释顺序，真实实现必须用 `time.monotonic()`，且网络读取可能分多块，单次 read timeout 仍不等于总时长。
 
 ### 2.4 客户端由明确的所有者创建和关闭
 
@@ -57,6 +125,15 @@ GET 通常可安全重放，但服务契约仍要确认；写操作超时后远�
 如果先对 500 的 HTML 调用 `json()`，就会把服务故障误报成解析故障。先检查传输与状态，再解析和检查结构，错误才能保留可定位的原因；错误类别又决定能否重试。可靠调用不是“多重试几次”，而是先正确分类，再在总预算内执行有限次数。
 分类错误还要保留给调用方：传输失败可进入临时故障策略，4xx 通常先修正请求或权限，结构和字段错误应修复契约。不能把所有异常都包装成“网络不好”。
 
+把检查顺序画成一条单向数据流，就能预先写出每个输入的预期错误：
+
+```text
+连接/读取 → HTTP 状态 → JSON 解析 → 列表结构 → 订单字段 → build_report
+   500          直接停止       200 才继续     对象在此失败    缺字段在此失败
+```
+
+对 `500 + HTML`，首个失败是状态；对 `200 + HTML`，首个失败是解析；对 `200 + {"orders":[]}`，首个失败是结构；对 `200 + [{"id":"A"}]`，信封通过但订单字段失败。四条路径都保留原响应类别与请求标识，后三类不会触发临时重试，除非调用方另有明确的契约恢复策略。
+
 ## 4. 示例与逐步走查
 
 ### 4.1 写受预算约束的异步适配器
@@ -64,6 +141,8 @@ GET 通常可安全重放，但服务契约仍要确认；写操作超时后远�
 #### 案例推进：只重试临时读取失败
 
 先声明 HTTPX 运行依赖并更新锁：`uv add "httpx>=0.27,<1"`。把下面保存为 `order_service/external.py`。
+
+这是 `framework-example`：静态检查会解析语法，但本次不执行，也没有访问真实订单服务。代码内的 `MockTransport` 只固定响应，运行它仍需项目已声明 HTTPX。
 
 ```python
 # framework-example: F14
@@ -89,26 +168,26 @@ async def fetch_orders(client, *, retries=1, timeout=5.0, deadline=None):
         if remaining <= 0:
             raise TransportError("总预算耗尽")
         try:
-            response = await client.get("/orders", timeout=min(timeout, remaining))
-        except httpx.TimeoutException as exc:
+            async with asyncio.timeout(remaining):
+                response = await client.get("/orders", timeout=min(timeout, remaining))
+                if response.status_code in {500, 502, 503, 504} and attempt < retries:
+                    continue
+                if response.status_code >= 500:
+                    raise HttpError(f"订单服务状态:{response.status_code}")
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise HttpError(f"订单服务状态:{response.status_code}") from exc
+                try:
+                    rows = response.json()
+                except ValueError as exc:
+                    raise ParseError("订单响应不是合法JSON") from exc
+                if not isinstance(rows, list):
+                    raise SchemaError("订单响应必须是列表")
+                return rows
+        except (TimeoutError, httpx.TimeoutException) as exc:
             if attempt == retries:
                 raise TransportError("订单服务超时") from exc
-            continue
-        if response.status_code in {500, 502, 503, 504} and attempt < retries:
-            continue
-        if response.status_code >= 500:
-            raise HttpError(f"订单服务状态:{response.status_code}")
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise HttpError(f"订单服务状态:{response.status_code}") from exc
-        try:
-            rows = response.json()
-        except ValueError as exc:
-            raise ParseError("订单响应不是合法JSON") from exc
-        if not isinstance(rows, list):
-            raise SchemaError("订单响应必须是列表")
-        return rows
     raise AssertionError("不可到达")
 async def main():
     transport = httpx.MockTransport(lambda request: httpx.Response(
@@ -120,7 +199,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-`deadline` 是调用方传入的单调时钟绝对时间。每次重试都会重新计算剩余预算；省略时，教学实现用 `timeout × 总尝试次数` 建立本地保守上限。这个实现没有加入退避和抖动，生产策略应共享调用方deadline，并把退避放在剩余预算内。
+`deadline` 是调用方传入的单调时钟绝对时间。每次重试都会重新计算剩余预算；省略时，教学实现用 `timeout × 总尝试次数` 建立本地保守上限。`asyncio.timeout(remaining)` 包住一次尝试的状态检查、响应读取和 JSON 解析，因此慢速分块也不能绕过整个 attempt 的截止时间；HTTPX 自身仍保留 connect/read/write/pool 的分阶段时限。这个实现没有加入退避和抖动，生产策略应共享调用方deadline，并把退避放在剩余预算内。`F14` 的替身主函数预期返回一条金额 1990 的订单、断言通过且控制台无输出；若 500 出现在最后一次尝试，预期是 `HttpError`，不会进入 JSON 解析。
 
 ### 4.2 用替身固定每种失败
 
@@ -140,6 +219,7 @@ async def main():
     valid = [{"id": "A", "user": "Alice", "amount_cents": 1990, "status": "paid"}]
     assert await request(httpx.Response(200, json=valid)) == valid
     cases = [(httpx.Response(500, text="down"), HttpError),
+             (httpx.Response(302, headers={"location": "/orders"}), HttpError),
              (httpx.Response(200, text="<html>"), ParseError),
              (httpx.Response(200, json={"orders": valid}), SchemaError)]
     for response, error in cases:
@@ -165,7 +245,7 @@ async def main():
 asyncio.run(main())
 ```
 
-测试客户端由 `async with` 关闭，业务计算没有被 mock。500、坏 JSON、错误对象和超时都在首层失败；第一次503后第二次响应成功，才返回数据。
+测试客户端由 `async with` 关闭，业务计算没有被 mock。500、302、坏 JSON、错误对象和超时都在首层失败；第一次503后第二次响应成功，才返回数据。预期结果是合法响应原样返回，四种固定响应分别抛 `HttpError`、`HttpError`、`ParseError`、`SchemaError`，超时抛 `TransportError`，恢复用例共调用两次并返回合法列表；控制台无输出。
 
 ### 4.3 接回同一订单业务
 
@@ -197,6 +277,14 @@ MockTransport 全部通过后，为什么仍不能说外部服务已经可靠？
 替身没有验证真实 DNS、TLS、代理、认证、服务部署和容量。它证明的是客户端在受控输入下如何分类、重试和关闭；真实集成需要另行记录证据范围。
 
 </details>
+
+### 6.2 用操作、预期结果与证据验收
+
+| 操作 | 预期结果 | 证据 |
+| --- | --- | --- |
+| 用 MockTransport 返回合法、500、302、坏 JSON、错误对象并模拟超时 | 分别成功或得到四类可区分错误 | `tests/test_external.py` 参数化断言 |
+| 让第一次 503、第二次成功 | 恰好两次尝试，返回合法订单 | 调用计数与剩余预算断言 |
+| 检查客户端与测试网络边界 | 客户端关闭，测试不访问真实网络 | `is_closed` 断言与离线测试配置 |
 
 ## 7. 面试问答与迁移
 

@@ -36,13 +36,15 @@ test("BFF 把 Ollama NDJSON 映射为应用 SSE token/done", async () => {
 });
 
 test("BFF 将供应商错误转成 SSE error，坏输入仍是422", async () => {
-  const server = app(async () => new Response(null, { status: 503 }));
-  const response = await server.request("/api/answer", {
-    method: "POST", headers, body: JSON.stringify({ question: "预付款" }),
-  });
-  assert.equal(response.status, 200);
-  assert.match(await response.text(), /event: error/);
-  const bad = await server.request("/api/answer", {
+  for (const [status, retryable] of [[401, false], [422, false], [429, true], [503, true]]) {
+    const server = app(async () => new Response(null, { status }));
+    const response = await server.request("/api/answer", {
+      method: "POST", headers, body: JSON.stringify({ question: "预付款" }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), new RegExp(`event: error[\\s\\S]*"retryable":${retryable}`));
+  }
+  const bad = await app().request("/api/answer", {
     method: "POST", headers, body: JSON.stringify({ question: "预付款", tenant_id: "b" }),
   });
   assert.equal(bad.status, 422);

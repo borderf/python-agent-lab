@@ -14,7 +14,7 @@ export function SearchPage({ identity, load, onOpenSource }: {
   const [submitted, setSubmitted] = useState<{ question: string; date: string } | null>(null);
   const { state, retry } = useAsyncData(submitted ? identity : null, submitted?.question ?? "",
     submitted?.date ?? "", signal => load(submitted?.question ?? "", submitted?.date ?? "", signal));
-  return <main>
+  return <section aria-label="文档搜索">
     <form onSubmit={event => {
       event.preventDefault();
       if (!identity || !draft.trim() || !date) return;
@@ -28,12 +28,12 @@ export function SearchPage({ identity, load, onOpenSource }: {
       <button type="submit" disabled={!identity || !draft.trim() || !date}>搜索</button>
     </form>
     {!identity && <p>请先建立会话。</p>}
-    {state.status === "loading" && <p role="status">搜索中…</p>}
+    {state.status === "loading" && <p role="status" aria-label="搜索状态">搜索中…</p>}
     {state.status === "error" && <div role="alert"><p>{state.message}</p><button onClick={retry}>重试</button></div>}
     {state.status === "success" && (state.data.length === 0 ? <p>没有找到相关条款。</p> :
       <ul aria-label="搜索结果">{state.data.map(hit => <li key={JSON.stringify([hit.sourceId, hit.version, hit.quote])}>
         <button type="button" onClick={() => onOpenSource(hit)}>打开来源 {hit.sourceId}</button>
         <span>版本 {hit.version}</span><blockquote>{hit.quote}</blockquote>
       </li>)}</ul>)}
-  </main>;
+  </section>;
 }

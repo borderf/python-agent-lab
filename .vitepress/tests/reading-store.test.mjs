@@ -40,4 +40,7 @@ test('the project route goes from retrieval to evaluation and DocPilot', () => {
     assert.ok(route.steps.at(-1).link.includes('/14-'))
     assert.equal(readProgress(storage(JSON.stringify({version: 1, pathId: id}))).pathId, id)
   }
+  for (const path of learningPaths) {
+    assert.equal(readProgress(storage(JSON.stringify({ version: 1, pathId: path.id }))).pathId, path.id)
+  }
 })

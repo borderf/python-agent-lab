@@ -1,6 +1,6 @@
 # 全栈产品交付实操：从页面到可用切片
 
-[本书目录](教材目录.md) · [产品思维训练](附录D-产品思维训练营.md) · [上线推广](附录F-上线发布与推广实验.md)
+[本书目录](教材目录.md) · [第6章](06-全栈开发与最小产品交付.md) · [产品思维训练](附录D-产品思维训练营.md) · [上线推广](附录F-上线发布与推广实验.md)
 
 ## 一、先定义全栈学习的完成标准
 
@@ -17,7 +17,9 @@
 
 ## 二、运行本地只读样例
 
-本节的标准库样例用于先看清页面与 HTTP 数据流。完成后进入[数据库、资料导入、引用回答与反馈的完整切片](../project-practice/从实验到项目交付.md#从空数据库启动-d2)，沿用同一用户任务逐层增加能力。真实模型、持久化与恢复在该手册中累计验证。
+**与项目实践的分工：** 本附录是零依赖机制样例，浏览器直接调用同源Python标准库接口，只验证表单、状态与HTTP；[项目实践《最小全栈切片》](../project-practice/最小全栈切片.md)是第6章主链路，浏览器React搜索页经Hono BFF调用Python检索服务。两者训练同一任务，但不是同一套协议或验收：先在本附录理解数据流，再按项目手册实现 `POST /api/search {question, as_of}`。本附录的HTTP检查不能证明BFF/Python链路，项目手册的HTTP探针也不能证明浏览器交互。
+
+本节的标准库样例用于先看清页面与 HTTP 数据流。需要资料导入、引用回答与持久化时，再进入[项目交付手册](../project-practice/从实验到项目交付.md#从空数据库启动-d2)，沿用同一用户任务逐层增加能力。真实模型、持久化与恢复在该手册中累计验证。
 
 文件位置：[server.py](../../practice/product_labs/search_slice/server.py)、[index.html](../../practice/product_labs/search_slice/index.html)、[app.js](../../practice/product_labs/search_slice/app.js)、[style.css](../../practice/product_labs/search_slice/style.css)。只使用两份虚构制度，不连接模型或真实数据。
 

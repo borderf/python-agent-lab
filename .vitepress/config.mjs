@@ -61,8 +61,8 @@ export default defineConfig({
         ['约束与结构', 1, 4], ['数据与协作', 5, 7], ['性能与可靠性', 8, 10], ['演进与实战', 11, 14]
       ]),
       '/docs/typescript-book/': bookSidebar('docs/typescript-book', [
-        ['类型与运行时', 1, 4], ['异步与流式交付', 5, 6], ['工程化与界面', 7, 10],
-        ['BFF、数据与AI', 11, 14], ['测试、观测与交付', 15, 18]
+        ['类型、异步与流式', 1, 6], ['工程化、React 与流式界面', 7, 10],
+        ['Node BFF、数据与 AI 集成', 11, 14], ['测试、观测与交付', 15, 18]
       ]),
       '/docs/ai-foundations/': bookSidebar('docs/ai-foundations', [
         ['从 token 到 Transformer', 1, 4], ['训练、推理与系统', 5, 9]

@@ -40,18 +40,70 @@ raw = [{"id": " A ", "amount_cents": 1990, "status": "paid"},
 rows = unique(normalize(raw))
 assert len(rows) == 1 and sum(row["amount_cents"] for row in rows) == 1990
 assert raw[0]["id"] == " A "
+print({"rows": len(rows), "paid_amount_cents": sum(row["amount_cents"] for row in rows),
+       "input_unchanged": raw[0]["id"] == " A "})
 ```
 
-这是最小数据流探针，完整项目还要检查字段集合、用户、状态和错误位置。先统计再去重会把 1990 错算成 3980。
+这是最小数据流探针，完整项目还要检查字段集合、用户、状态和错误位置。先统计再去重会把 1990 错算成 3980。同一示例最后打印的汇总结果为：
+
+```text
+{'rows': 1, 'paid_amount_cents': 1990, 'input_unchanged': True}
+```
+
+其中 `input_unchanged` 检查规范化没有回写调用方的原始字典；报告只消费去重后的行，所以金额不会随重复输入翻倍。
+
 ### 2.2 入口、业务和输出各负一项责任
 
 CLI 解析参数和文件，业务函数校验、去重、汇总，输出函数负责编码与原子替换。异步查询只返回原始订单，不自己计算金额。这样文件、查询和后面的 HTTP 入口可以复用同一规则。
 
 资源责任也要明确：输入文件由 `with` 关闭；输出先写同目录临时文件，全部成功后再替换目标；失败时删除本次临时文件并保留旧报告。
 临时替换保证的是单机文件在一次成功发布时的完整性，不保证文件与数据库同时提交。若后续引入数据库，需要额外定义恢复与对账，不能沿用“换文件”作为分布式事务。
+
+下面模拟“消费完全部输入后才写临时文件”。第二行故意失败，因此替换与临时文件清理都不应发生，旧报告保持不变。
+
+```python
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+def render(rows):
+    return json.dumps({"count": sum(1 for _ in rows)}, ensure_ascii=False)
+
+def broken_rows():
+    yield {"id": "A"}
+    raise ValueError("第2行坏JSON")
+
+with TemporaryDirectory() as directory:
+    target = Path(directory) / "report.json"
+    temporary = target.with_suffix(".tmp")
+    target.write_text('{"count": 1}', encoding="utf-8")
+    try:
+        try:
+            payload = render(broken_rows())
+        except ValueError as exc:
+            error = str(exc)
+        else:
+            temporary.write_text(payload, encoding="utf-8")
+            temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print(target.read_text(encoding="utf-8"), error, list(Path(directory).glob("*.tmp")))
+```
+
+预期输出为 `{"count": 1} 第2行坏JSON []`。执行时先遍历生成器，异常发生在写临时文件之前；`finally` 仍检查并删除本次临时路径。如果异常发生在写入后、替换前，旧目标同样保留；`replace` 成功后目标才成为新报告。这个局部原子性不覆盖数据库或外部 HTTP。
+
 ### 2.3 可编辑安装与 wheel 是两种验收
 
 本章使用 `pip/uv` 的可编辑安装，让新虚拟环境能找到 `order-report` 入口；它仍指向当前源码，适合开发。wheel 是独立安装产物，第13章再构建并放到非源码目录验证。两种证据不能互相替代。
+
+| 安装方式 | 可观察数据流 | 预期结果 | 不能证明 |
+| --- | --- | --- | --- |
+| 可编辑安装 | 项目外空目录 → `order-report` → 当前 `src` 源码 | 入口退出 0，报告金额 1990 | wheel 是否包含全部文件 |
+| wheel 安装 | `dist/*.whl` → 新环境 site-packages → 非源码目录入口 | 同一输入得到同一报告 | 真实外部服务或所有平台 |
+| 当前目录直接运行 | shell 当前目录 → 偶然可导入的包 | 可能成功 | 安装元数据与入口是否正确 |
+
+因此本章验收命令必须切到项目外空目录，并记录解释器与入口的绝对路径；第13章再切换为 wheel 数据流。
+
 ### 2.4 用需求—验收矩阵组织四类证据
 
 先让每条需求都有可观察的验收条件，再选测试和命令；不要从“已经写了哪些测试”反推需求覆盖。
@@ -73,6 +125,27 @@ CLI 解析参数和文件，业务函数校验、去重、汇总，输出函数�
 ### 3.1 正确汇总来自不可交换的处理顺序
 
 字段规范化决定哪些记录算重复；去重决定金额出现几次；汇总只消费已去重记录。若交换顺序，局部函数仍可能正确，整条链却重复计数。因此每一层都要写明前置条件与输出契约，组合测试使用同一份固定数据贯穿全链。
+
+用两条完全重复的 1990 分订单交换顺序，可以直接看到错误规模。
+
+```python
+rows = [
+    {"id": "A", "amount_cents": 1990, "status": "paid"},
+    {"id": "A", "amount_cents": 1990, "status": "paid"},
+]
+
+def total(items):
+    return sum(row["amount_cents"] for row in items if row["status"] == "paid")
+
+def unique(items):
+    return list({row["id"]: row for row in items}.values())
+
+print("sum-first", total(rows))
+print("unique-first", total(unique(rows)))
+```
+
+预期输出为 `sum-first 3980` 和 `unique-first 1990`。执行过程先分别计算两条路径，再比较金额；边界是这里的 `unique` 只做教学去重，不检查同 ID 内容冲突，正式实现仍要用第12章统一函数。顺序错误不会让单个 `sum` 报错，所以必须用贯穿数据链的组合测试发现。
+
 ## 4. 示例与逐步走查
 ### 4.1 写统一业务函数
 #### 案例推进：从原始行生成报告
@@ -111,6 +184,9 @@ def build_report(raw_rows):
             "paid_amount_cents": sum(row["amount_cents"] for row in by_id.values()
                                      if row["status"] == "paid")}
 ```
+
+以固定三条输入（A/Alice/1990/paid、B/Bob/1000/pending、A 的完全重复行）调用 `build_report`，预期返回 `{'input_count': 3, 'order_count': 2, 'paid_amount_cents': 1990}`。执行过程先逐行规范化并累计输入数，再按 ID 保留首条，最后只汇总 `paid` 金额；若第三条 A 的金额改成 1991，应在去重冲突检查处抛出 `OrderConflict`，不会生成部分报告。
+
 ### 4.2 接文件入口并声明安装信息
 #### 案例推进：失败时保留旧报告
 
@@ -225,12 +301,22 @@ if (name := raw.strip()):
 ### 6.1 先预测，再查看参考推导
 
 为什么单元测试都通过，仍要跑一次“文件→校验→去重→汇总→替换输出”的完整链路？
+
 <details>
 <summary>完成预测后查看解释</summary>
 
 组合错误常发生在契约衔接处，例如单位不一致、先去重后统计或失败后覆盖输出。完整链路用固定数据检查这些前后条件，也能发现入口和资源管理问题。
 
 </details>
+
+### 6.2 用操作、预期结果与证据验收
+
+| 操作 | 预期结果 | 证据 |
+| --- | --- | --- |
+| 在项目外空目录可编辑安装并运行固定输入 | 退出 0，报告为 3/2/1990 | 安装命令、入口绝对路径与 stdout |
+| 把第三条 A 改成冲突金额，再制造坏 JSON 行 | 非零退出，stderr 指向冲突或行号 | 两次命令与退出码 |
+| 比较失败前后的目标、输入和临时文件 | 旧报告与输入不变，无本次 `.tmp` 残留 | 文件清单与内容哈希 |
+
 ## 7. 面试问答与迁移
 **问：怎样说明项目不是只会跑示例？**
 答：换一份未见输入，从安装入口运行到报告，再制造冲突和坏行；解释首次失败位置、退出码和旧报告为何保留。证据要覆盖正常与失败路径。

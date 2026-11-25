@@ -10,8 +10,8 @@
 | --- | --- |
 | 接收上一章产物 | 带租户、版本、有效期和定位的文档页面与字段产物 |
 | 本章只新增什么 | 切块、关键词与向量检索、权限过滤、索引代次和拒答 |
-| 交付什么 | 授权检索基线、真实Embedding对照或未配置说明、带引用的查询结果 |
-| 怎样验收 | 当前版可见，旧版与租户外资料不进候选；无证据不调用模型 |
+| 交付什么 | 授权检索基线、真实Embedding对照或未配置说明、带来源定位的查询结果 |
+| 怎样验收 | 当前版可见，旧版与租户外资料不进候选；无证据返回空候选，拒答与不调用模型在第23章验收 |
 
 **本章从这里开始：** 用户问当前预付款上限，语料里同时有旧制度、新制度和另一租户制度。RAG先找有权且适用的原文，再让模型组织答案；相似度不能替代授权。
 
@@ -32,6 +32,29 @@
 
 固定问题“当前预付款上限是多少”，只导出候选来源与定位。确认旧版和另一租户都不在候选里，再接模型；这样检索错误不会被生成结果掩盖。
 
+切块的最小例子先按条款边界，而不是硬切字符。每个块保留标题、正文和来源元数据，预期输出显示两块都没有把适用条件拆丢。
+
+```python
+sections = [
+    {"title": "预付款", "paragraphs": ["适用于A租户。", "当前上限为20%。"]},
+    {"title": "例外", "paragraphs": ["经批准的框架订单除外。"]},
+]
+
+chunks = []
+for section in sections:
+    chunks.append({
+        "chunk_id": f"policy-{len(chunks) + 1}",
+        "source_id": "policy-v2",
+        "text": section["title"] + "：" + "".join(section["paragraphs"]),
+    })
+
+print(len(chunks))
+for chunk in chunks:
+    print(chunk["chunk_id"], chunk["text"])
+```
+
+预期输出为 `2`，以及 `policy-1 预付款：适用于A租户。当前上限为20%。` 和 `policy-2 例外：经批准的框架订单除外。`。执行过程把同一条款的标题与段落合并，再附加稳定来源；边界是段落本身被错误解析或条件跨页时，仍需第19章的页面证据，不能靠 overlap 伪造缺失内容。
+
 ### 2.2 Embedding与向量库分工不同
 
 Embedding模型把问题与文本转成兼容向量，余弦相似度比较方向，点积还受长度影响。查询与文档向量必须处于可比较的向量空间，并保持维度与归一化约定；同一模型是本书基线，非对称检索也可以使用分别训练但经验证兼容的查询/文档编码器。同维度的两个模型通常也不共享向量空间。
@@ -48,6 +71,30 @@ Embedding模型把问题与文本转成兼容向量，余弦相似度比较方�
 
 把编码器从A换成B后，不能把旧向量与新问题向量混算。记录模型标签、维度、归一化、分块和来源版本，建立新索引并回归，再切换查询入口。
 
+相似度的区别可以用两个二维向量直接算：方向相同但长度不同的向量，余弦相似度仍为 1，点积却受长度影响。
+
+```python
+from math import sqrt
+
+def cosine(left, right):
+    denominator = sqrt(sum(x * x for x in left)) * sqrt(sum(y * y for y in right))
+    if not denominator:
+        raise ValueError("zero vector")
+    return sum(x * y for x, y in zip(left, right)) / denominator
+
+query = [1.0, 0.0]
+short, long = [1.0, 0.0], [2.0, 0.0]
+print("cosine", cosine(query, short), cosine(query, long))
+print("dot", sum(x * y for x, y in zip(query, short)),
+      sum(x * y for x, y in zip(query, long)))
+try:
+    cosine(query, [0.0, 0.0])
+except ValueError as exc:
+    print("zero", str(exc))
+```
+
+预期输出为 `cosine 1.0 1.0`、`dot 1.0 2.0`、`zero zero vector`。执行过程先算向量范数再除点积；零向量没有方向，必须拒绝。边界是查询与文档必须来自兼容空间，这个探针没有检查维度和模型标签，真实索引还要把这些写入元数据。
+
 ### 2.3 权限与版本先限制候选，再排名
 
 服务端从可信身份得到租户，不能接受模型或用户参数任意改写。按业务日期选择生效来源，再执行检索与排序；如果先取全库top-k再过滤，别人的资料可能挤掉本应返回的证据。
@@ -62,6 +109,27 @@ Embedding模型把问题与文本转成兼容向量，余弦相似度比较方�
 #### 案例推进：把越权材料放在最高分位置
 
 手工让另一租户向量与问题完全相同，仍应在候选生成前排除。最终答案、引用、模型上下文和日志都不得出现该来源；只隐藏页面上的结果不算隔离。
+
+把最高分材料故意设为旧版和另一租户，可以直接看到过滤顺序的结果。日期规则采用 `valid_from <= as_of < valid_to`。
+
+```python
+as_of = "2026-01-01"
+rows = [
+    {"id": "other", "tenant": "b", "valid_from": "2025-01-01", "valid_to": None, "score": 1.0},
+    {"id": "old", "tenant": "a", "valid_from": "2024-01-01", "valid_to": "2026-01-01", "score": 0.99},
+    {"id": "current", "tenant": "a", "valid_from": "2025-06-01", "valid_to": None, "score": 0.80},
+]
+
+def visible(row):
+    return (row["tenant"] == "a" and row["valid_from"] <= as_of
+            and (row["valid_to"] is None or as_of < row["valid_to"]))
+
+candidates = [row for row in rows if visible(row)]
+print("before-rank", [row["id"] for row in candidates])
+print("top1", max(candidates, key=lambda row: row["score"])["id"])
+```
+
+预期输出为 `before-rank ['current']` 和 `top1 current`。执行过程先用可信租户与业务日期过滤，再排序；旧版在 `valid_to` 当天失效，另一租户即使分数为 1 也不进入候选。边界是权限服务不可用时必须失败关闭，不能把 `visible` 改成恒真；用户参数只能缩小可见集合。
 
 ### 2.4 更新、删除和无证据都是正常路径
 
@@ -79,6 +147,21 @@ Embedding模型把问题与文本转成兼容向量，余弦相似度比较方�
 
 两个租户可以有同名`doc_id`。发布、可见性和删除都以`(tenant_id, doc_id)`为作用域；同代次同内容可幂等重试，同代次不同内容必须冲突。
 
+缓存键也必须显式包含权限与代次。下面只比较键是否变化，不实现缓存存储。
+
+```python
+def cache_key(tenant, scopes, question, as_of, generation):
+    return tenant, tuple(sorted(scopes)), question, as_of, generation
+
+base = cache_key("a", ["read"], "当前上限", "2026-01-01", "g2")
+new_generation = cache_key("a", ["read"], "当前上限", "2026-01-01", "g3")
+revoked = cache_key("a", [], "当前上限", "2026-01-01", "g2")
+print("generation-changes-key", base != new_generation)
+print("permission-changes-key", base != revoked)
+```
+
+预期输出为 `generation-changes-key True` 和 `permission-changes-key True`。执行过程把租户、权限范围、问题、业务日期与代次全部放入键；边界是键变化只避免误命中，撤权还必须让在线过滤立即生效，不能等缓存 TTL 到期。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 候选范围决定检索答案的上限
@@ -86,6 +169,27 @@ Embedding模型把问题与文本转成兼容向量，余弦相似度比较方�
 排序只能重排已有候选，不能补回被过滤或截断掉的正确证据。先按身份与日期形成可见集合，再按相关性取top-k，模型才只能在正确范围内选择；先top-k后过滤则可能既越权又漏掉本租户证据。
 
 更新索引若不切换可见代次，旧块仍会参与排名；撤权若不作用于在线过滤与缓存，删除源文件也不会真正撤下内容。因此检索正确性由“候选范围、排名、生成、引用”共同决定，不是单个相似度阈值。
+
+过滤顺序可以用 top-1 反例直接比较。让本租户正确资料排在第 4，旧版与越权资料排在第 1、2：
+
+```python
+ranked = [
+    {"id": "old", "tenant": "a", "current": False},
+    {"id": "other", "tenant": "b", "current": True},
+    {"id": "irrelevant", "tenant": "a", "current": False},
+    {"id": "current", "tenant": "a", "current": True},
+]
+
+def eligible(row):
+    return row["tenant"] == "a" and row["current"]
+
+after = [row["id"] for row in ranked[:1] if eligible(row)]
+before = [row["id"] for row in [row for row in ranked if eligible(row)][:1]]
+print("top-k-then-filter", after)
+print("filter-then-top-k", before)
+```
+
+预期输出为 `top-k-then-filter []` 和 `filter-then-top-k ['current']`。执行过程先取全库 top-1 再过滤，正确资料已被挤出；先过滤则候选只含当前版本租户资料。边界是 `eligible` 必须由服务端身份、权限和日期构造，任何分支都不能绕过。
 
 ## 4. 示例与逐步走查
 
@@ -110,7 +214,7 @@ ranked = sorted(visible, key=lambda row: cosine([1,0], row["vector"]), reverse=T
 assert [row["id"] for row in ranked] == ["A"]
 ```
 
-A和B与问题的余弦分数都是1，但B不在当前租户候选内。真实检索还要检查有效期、来源身份和维度；手工向量只解释评分与过滤顺序。
+A和B与问题的余弦分数都是1，但B不在当前租户候选内。真实检索还要检查有效期、来源身份和维度；手工向量只解释评分与过滤顺序。`B20` 的预期结果是排序列表仅含 `A`，断言通过且控制台无输出；执行过程先按租户生成 `visible`，再对可见行算余弦并排序。
 
 ### 4.2 第二步：用代次和租户作用域发布新制度
 
@@ -166,7 +270,7 @@ assert [row["text"] for row in visible("a")] == ["A租户30%"]
 assert len(rows) == 5
 ```
 
-这是单进程概念模型，不是数据库并发实现。旧行逻辑隐藏后仍物理存在，真实系统必须让所有在线入口不可见；块数减少时还要删除旧尾块，并使相关缓存失效。业务版本说明制度何时生效，索引代次说明哪次构建正在使用，两者不能混为一个字段。
+这是单进程概念模型，不是数据库并发实现。旧行逻辑隐藏后仍物理存在，真实系统必须让所有在线入口不可见；块数减少时还要删除旧尾块，并使相关缓存失效。业务版本说明制度何时生效，索引代次说明哪次构建正在使用，两者不能混为一个字段。`S20B` 的预期结果是 a 租户可见文本从 30% 切到 20%，同代次同内容返回 `unchanged`，同代次 25% 冲突，b 租户独立切到 40%，空块不发布，删除发布指针后 a 只剩 30%，物理行数仍为 5；断言通过且控制台无输出。
 
 ### 把手算向量换成真实 Embedding
 
@@ -183,7 +287,7 @@ uv run --frozen python -m practice.enterprise_ai.vector_compare --embed-model $e
 
 ### 本章累计任务：完成订单政策的授权检索
 
-继续DocPilot契约第7–12步：先按租户与日期过滤，再排名、限制数量、处理空结果和稳定并列。接上真实Embedding做一次同条件对照，保存候选、模型上下文、引用和无证据案例。
+继续DocPilot契约第7–12步：先按租户与日期过滤，再排名、限制数量、处理空结果和稳定并列。接上真实Embedding做一次同条件对照，保存候选、排名与无证据案例；引用与模型上下文随第23章的answer一起验收。
 
 **未通过时怎样定位：** 先top-k后过滤会让他人资料挤占候选；相似度不证明事实；quote存在不排除旧版或不支持结论。先检查可见集合，再检查召回、排序与生成。
 
@@ -191,13 +295,13 @@ uv run --frozen python -m practice.enterprise_ai.vector_compare --embed-model $e
 
 ## 6. 验收与自测
 
-**验收命令：** 在仓库根目录运行完整DocPilot契约；它检查权限、版本、引用位置与无证据行为，不评价真实语义质量。
+**验收命令：** 在仓库根目录运行DocPilot契约前12步：第1–6步回归第19章产物，第7–12步检查过滤、排名、limit与独立副本。引用位置与无证据不调用模型属于第13–20步，在第23章验收；本命令不评价真实语义质量。
 
 ```powershell
-uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module learner_docpilot -q
+uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-module learner_docpilot --through-step 12 -q
 ```
 
-该命令不替代第5节的真实Embedding对照记录，也不评价语义质量；未配置模型时只记录离线基线通过。
+第13–20步显示deselected，不是通过。该命令不替代第5节的真实Embedding对照记录，也不评价语义质量；未配置模型时只记录离线基线通过。
 
 ### 6.1 先预测，再查看参考推导
 
@@ -209,6 +313,14 @@ uv run --frozen python -m pytest tests/learner/contract_docpilot.py --learner-mo
 相似度描述表示空间中的接近，不能证明时间适用性或访问权限。先按可信身份和生效日期形成候选，再排名与生成；答案只能引用实际使用的当前版本。
 
 </details>
+
+### 6.2 用操作、预期结果与证据验收
+
+| 操作 | 预期结果 | 证据 |
+| --- | --- | --- |
+| 放入旧版、另一租户和当前版材料 | 候选只含当前授权版，越权材料不进入上下文 | 可见集合、top-k 与引用 |
+| 查询无证据或仅过期版本 | 可见候选为空，不凑满Top-K | 空结果记录；拒答与调用计数在第23章验收 |
+| 发布新代次并改变权限；配置真实 Embedding | 新代次可见、缓存键变化；未配置则明确待验 | 代次记录、缓存键与模型标签 |
 
 ## 7. 面试问答与迁移
 

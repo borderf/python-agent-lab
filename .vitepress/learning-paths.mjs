@@ -16,7 +16,7 @@ const foundation = Array.from({ length: 17 }, (_, index) => index + 1)
 const application = [...foundation, 18, 19, 20, 21, 22, 23]
 
 export const learningPaths = [
-  { id: 'python', label: 'Python 基础', steps: foundation.slice(0, 12).map(number => chapters[number]) },
+  { id: 'python', label: 'Python 核心', steps: foundation.slice(0, 12).map(number => chapters[number]) },
   { id: 'application', label: 'AI 应用交付', steps: [...application, 29, 30].map(number => chapters[number]) },
   { id: 'agent', label: 'Agent 开发', steps: [...application, 24, 25, 26, 29, 30].map(number => chapters[number]) },
   { id: 'architecture', label: '软件架构', steps: bookSteps('architecture-book') },

@@ -69,14 +69,14 @@
 | --- | --- | --- |
 | Tokenizer/BPE、byte fallback、概率生成、解码参数、上下文与usage | [第18章](18-大模型基础、消息与结构化输出.md)：区分token、字符、事实与用量 | 主线必修 |
 | 注意力、Q/K/V、softmax、掩码、损失与推理资源 | 第18章：最小数学解释与B18局部实验，明确不是完整Transformer实现 | 原理必修，完整训练延伸 |
-| Prompt、消息角色、少样例、JSON mode/Schema、流式完成原因与结构化输出 | 第18章：格式→Schema→事实逐层验证，分片完整后才执行 | 主线必修 |
+| Prompt、消息角色、少样例、JSON mode/Schema、流式完成原因与结构化输出 | 第18章：格式→Schema→事实逐层验证，分片完整后才执行（工具参数装配探针见第24章S24D） | 主线必修 |
 | 预训练、SFT/LoRA、量化、批处理与KV | 第18章提供机制与选择依据；训练/硬件调优参考附录，不能据此宣称已会训练 | 原理入门与专题延伸 |
 | 文档类型、OCR/表格、reading order、抽取、坐标/offset单位与证据版本 | [第19章](19-文档解析、字段抽取与证据定位.md)：原文与字段绑定，区分解析错和选择错 | 主线必修，真实格式需集成 |
 | RAG离线/在线、chunk/overlap、embedding、normalization、向量库与更新 | [第20章](20-RAG、Embedding、向量库与权限过滤.md)：先无模型基线，再向量与证据回答 | 主线必修 |
 | 余弦/点积、ANN与精确top-k、元数据、权限前过滤与索引代次 | 第20章：相似不等于可信、当前或可访问 | 主线必修，索引底层延伸 |
 | BM25参数、双候选池、召回上限、RRF、graded relevance/nDCG与cross-encoder重排 | [第21章](21-混合检索、重排与RAG评测.md)：解释信号与失败，手算融合再实现 | 主线必修 |
 | Recall/Precision/MRR/nDCG与误差分析 | 第21章：分母、粒度、无证据题与候选重复分别处理 | 主线必修 |
-| Tool Calling、注册表、schema vs授权、参数校验、observation截断、call_id、预算和退出 | [第24章](24-ToolCalling与手写AgentLoop.md)先用替身检查结果回传，再验证真实模型的工具选择与实际执行 | Agent 项目必修 |
+| Tool Calling、注册表、schema vs授权、参数校验、observation截断、call_id、预算和退出 | [第24章](24-ToolCalling与手写AgentLoop.md)先用替身检查结果回传与流式参数装配（S24D：半段不执行、闭合才执行），再验证真实模型的工具选择与实际执行 | Agent 项目必修 |
 | 图、State/reducer、Checkpoint/Store、thread、Interrupt/Resume与重放边界 | [第25章](25-LangGraph、状态、Checkpoint与人工审核.md)比较恢复机制，对重启和重放分别验收 | Agent 项目必做持久状态与恢复，图框架按实现选用 |
 | MCP角色、能力、协议适配、传输生命周期与可信上下文 | [第27章](27-MCP与跨系统工具边界.md)保持原有业务行为，验证跨进程发现、调用与关闭 | 工具跨进程共享时选修 |
 | Multi-Agent模式、最小上下文、局部失败、重试预算、确定性合并与冲突 | [第28章](28-Multi-Agent的分工、并行与合并.md)在同题、同预算下比较单 Agent 与多个角色 | 有分工假设与基线时选修 |

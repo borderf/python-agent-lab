@@ -103,6 +103,49 @@ Reranker联合比较问题与候选，能调整顺序，也会增加计算与等
 
 标准来源不在索引里，先查解析和权限过滤；在候选却掉出上下文，再查排序与截断；进入上下文仍答错，才检查生成是否误读证据。每一步都保留中间产物，避免直接更换模型。
 
+### 2.5 用一张运行单验收融合与评测
+
+不要把“融合完成”当成“评测通过”。固定问题“预付款比例上限是多少”，把两路候选、去重后的融合序列、标准来源和K值作为输入，逐阶段留下可比较的输出。
+
+| 阶段 | 输入 | 处理步骤 | 输出 | 失败点与验收 |
+| --- | --- | --- | --- | --- |
+| 授权召回 | 租户、业务日期、两路原始排名 | 先过滤，再各路去重 | 两路可见候选 | 越权来源为零；过滤前后数量能对上 |
+| 融合 | 两路可见排名、k | 按RRF累加，同分按ID | 完整融合序列 | 首项与手算一致；不把原始分数直接相加 |
+| 截断 | 融合序列、K | 取前K个唯一来源 | 实际上下文候选 | 标准证据若在K外，归为排序/预算问题 |
+| 评分 | 前K、相关集合 | 算Recall、Precision、RR并列出漏项 | 逐题指标与missing | 分母非零；无答案题另列，不能混入 |
+
+下面的探针从已经融合的序列开始，避免重复实现B21。它同时暴露“总分看起来不错，但漏了一条证据”的情况：
+
+```python
+import json
+
+def audit_ranking(ranked, relevant, k):
+    if not isinstance(ranked, list) or not all(isinstance(item, str) and item for item in ranked):
+        raise ValueError("ranked必须是非空来源ID列表")
+    if not isinstance(relevant, set) or not relevant or not all(isinstance(item, str) for item in relevant):
+        raise ValueError("relevant必须是非空来源ID集合")
+    if type(k) is not int or not 1 <= k <= len(ranked):
+        raise ValueError("K必须是1到候选数之间的整数")
+    top = list(dict.fromkeys(ranked))[:k]
+    hits = [item for item in top if item in relevant]
+    missing = sorted(relevant - set(top))
+    first = next((rank for rank, item in enumerate(top, 1) if item in relevant), None)
+    return {"top": top, "hits": hits, "missing": missing,
+            "recall": len(hits) / len(relevant), "precision": len(hits) / len(top),
+            "reciprocal_rank": 0 if first is None else 1 / first}
+
+result = audit_ranking(["OLD", "P200", "policy-a-current", "S200"],
+                       {"P200", "policy-a-current", "S200"}, 3)
+assert result["missing"] == ["S200"]
+assert result["recall"] == 2 / 3 and result["precision"] == 2 / 3
+assert result["reciprocal_rank"] == 1 / 2
+print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+```
+
+预期输出中`top`为`["OLD","P200","policy-a-current"]`，`missing`为`["S200"]`，Recall与Precision都是`2/3`，RR为`0.5`。`OLD`排第一说明旧版过滤或排序失败；若它已进入授权候选，就不能只调重排模型，先查版本过滤。K小于3时还要重新计算，不能沿用整池的分母。该探针只验证评分，不证明真实检索收益。
+
+**判定对错：** 输出三项指标且列出`missing`才算完整；只报Recall、把无答案题记100%，或拿不同K的分数直接比较，均不通过。
+
 ## 3. 原理讲解与推导
 
 ### 3.1 上游缺失不能由下游补回
@@ -153,7 +196,9 @@ assert rrf([["A","B"],["B","C"]])[0] == "B"
 
 ## 6. 验收与自测
 
-**验收命令与产物：** 运行4.1代码块，确认融合首项为B；交付一张逐题表，包含四组前K、相关来源集合、Recall、RR、耗时和费用。至少检查一道无答案题与一道越权题，且它们不进入有答案题的召回分母。
+**验收命令与产物：** 运行4.1代码块，确认融合首项为B；运行2.5探针，确认`missing=["S200"]`、Recall与Precision为`2/3`、RR为`0.5`。交付一张逐题表，包含四组前K、相关来源集合、Recall、RR、耗时和费用。至少检查一道无答案题与一道越权题，且它们不进入有答案题的召回分母。
+
+**判定对错：** 两个探针输出一致且逐题表能定位漏项才通过；只给平均分、隐藏失败题或混用K与分母不通过。
 
 <details>
 <summary>完成预测后查看解释</summary>

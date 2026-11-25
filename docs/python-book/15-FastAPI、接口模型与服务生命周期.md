@@ -10,7 +10,7 @@
 - 接收：第12章 `build_report`、第14章 `fetch_orders` 及其错误类型。
 - 只新增：FastAPI 请求/响应模型、依赖注入、应用 lifespan 和接口测试。
 - 交付：`order_service/main.py` 与 `tests/test_api.py`，提供 `/reports` 和 `/external-report`。
-- 验收：200/422/409/502 路径可区分，非法请求不调用业务，应用退出后共享 HTTP 客户端关闭。
+- 验收：200/422/409/502 路径可区分，形状非法不调用业务，空白字符串形状合法但由业务拒绝并返回422，应用退出后共享 HTTP 客户端关闭。
 
 **本章从这里开始：** 同一份订单规则现在要供其他系统调用。接口多了一层输入、身份、错误和资源责任；路由只做协议转换，业务仍留在原函数。
 
@@ -26,9 +26,43 @@ FastAPI 中写在路径模板里的参数来自 path；未嵌入路径的函数�
 
 `strict=True` 阻止 JSON 字符串 `"1990"`、布尔值等被强转成 int，`extra="forbid"` 拒绝未知字段；约束仍只覆盖形状，不去空白、不判断租户归属、不解决同 ID 冲突。`response_model` 在输出边界过滤、序列化并再次校验；返回结构不匹配是服务端契约错误，通常导致 5xx，不应伪装成请求 422。
 
+先为每个字段指定唯一来源，再写路由。以下契约中 `tenant_id` 来自可信身份，`limit` 来自 query，订单列表来自 body；请求体里重复出现的 `limit` 是未知字段，而不是另一条覆盖规则。
+
+| 请求片段 | 唯一来源 | 预期处理 |
+| --- | --- | --- |
+| `POST /reports?limit=2` | path 无动态段，query 提供 `limit` | 校验为正整数 |
+| `{"orders":[...]}` | 单个 Pydantic 参数作为 body | 校验订单形状 |
+| `{"limit":99}` 混入 body | 无合法来源 | `extra="forbid"` 拒绝，返回 422 |
+| 请求体自报 `tenant_id` | 不可信输入 | 不用于授权；真实租户来自服务端身份 |
+
+数据流因此是“解析来源 → 模型校验 → 可信身份与授权 → 业务”。422 有两个来源：模型在业务前拒绝形状非法的请求；形状合法但业务校验拒绝（如全空白 id）也映射为 422。同 ID 内容冲突应进入业务并映射为 409，不能提前改写成 422。
+
 ### 2.2 依赖注入提供可替换协作者
 
 业务函数、外部客户端和可信身份由依赖边界提供。路由不读取环境，也不创建全局客户端；测试可替换依赖，同时仍执行真实授权与业务规则。本最小示例只演示业务与客户端注入，认证方案必须在部署前补齐。
+
+依赖注入的价值可以用“同一业务、一个记录型替身”观察。替身只增加调用次数，不改变计算，因此测试同时能检查结果和调用边界。
+
+```python
+def build_report(rows):
+    return sum(row["amount_cents"] for row in rows if row["status"] == "paid")
+
+calls = []
+def tracked_builder(rows):
+    calls.append(1)
+    return build_report(rows)
+
+def endpoint(builder):
+    rows = [
+        {"amount_cents": 1990, "status": "paid"},
+        {"amount_cents": 1000, "status": "pending"},
+    ]
+    return builder(rows)
+
+print(endpoint(build_report), endpoint(tracked_builder), len(calls))
+```
+
+预期输出为 `1990 1990 1`。执行时路由依赖只负责取得协作者，真实 builder 与 tracked builder 得到相同输入并返回相同金额；替身额外记录一次调用。边界是替身若直接返回固定 1990，就只能证明 mock 被调用，不能证明订单规则；认证与授权也应作为独立依赖保留真实检查。
 
 ### 2.3 请求依赖的 yield 负责请求范围清理
 
@@ -37,6 +71,35 @@ FastAPI 中写在路径模板里的参数来自 path；未嵌入路径的函数�
 生成器只能 yield 一次；yield 之前的失败还没有可释放资源，yield 之后则必须让清理覆盖异常路径。需要确认清理次数时，在正常、业务失败和取消三条路径分别记录事件。
 
 依赖清理与响应发送的先后顺序取决于框架版本和依赖类型；需要精确顺序时用当前版本的集成测试固定，不能把“路由函数已返回”当作清理已完成。测试替身也要实现相同释放契约，否则会掩盖泄漏。
+
+`yield` 依赖的清理路径可以用普通生成器先验证。正常返回和业务异常都必须在尾部释放资源。
+
+```python
+events = []
+
+def request_resource():
+    events.append("open")
+    try:
+        yield "connection"
+    finally:
+        events.append("close")
+
+for fail in (False, True):
+    events.clear()
+    try:
+        resource = request_resource()
+        connection = next(resource)
+        events.append("use")
+        if fail:
+            raise ValueError("business failure")
+    except ValueError as exc:
+        events.append(type(exc).__name__)
+    finally:
+        resource.close()
+    print(fail, events)
+```
+
+预期输出为 `False ['open', 'use', 'close']` 和 `True ['open', 'use', 'ValueError', 'close']`。执行过程在 `next` 时进入生成器，在 `close` 或异常传播时执行 `finally`；边界是生成器只能 yield 一次，yield 之前的失败没有资源可释放，框架中的取消路径还要用集成测试确认清理次数。
 
 ### 2.4 应用级与请求级资源生命周期不同
 
@@ -54,6 +117,26 @@ CORS 只约束浏览器跨域访问，TLS 只保护传输；它们都不回答�
 CLI 和 API 各自解析输入，但都把规范化后的订单交给 `build_report`。路由复制金额算法会产生第二个规则来源，使一次状态变更只更新一个入口。统一业务函数后，接口测试才能验证真正会复用的计算，而不是另一套示例逻辑。
 授权也不能因此省略：模型合法只说明字段可进入业务，资源归属和动作权限仍由可信上下文决定。测试替身应保留真实授权规则，否则“通过”只证明 mock 按预期返回。
 
+两个入口可以只共享一个最小规则函数。下面用 CLI 原始列表与 API 请求体两种适配输入，预期得到同一报告。
+
+```python
+def build_report(rows):
+    return {"paid_amount_cents": sum(
+        row["amount_cents"] for row in rows if row["status"] == "paid")}
+
+def cli_adapter(raw_rows):
+    return build_report(raw_rows)
+
+def api_adapter(body):
+    return build_report(body["orders"])
+
+rows = [{"amount_cents": 1990, "status": "paid"},
+        {"amount_cents": 1000, "status": "pending"}]
+print(cli_adapter(rows) == api_adapter({"orders": rows}), cli_adapter(rows))
+```
+
+预期输出为 `True {'paid_amount_cents': 1990}`。执行过程分别解析入口输入，再调用同一个 `build_report`；边界是这个最小函数没有规范化、去重和授权，真实项目必须保留第12章规则与可信身份检查，不能把探针当成完整 API。
+
 ## 4. 示例与逐步走查
 
 ### 4.1 定义订单报告接口
@@ -61,6 +144,8 @@ CLI 和 API 各自解析输入，但都把规范化后的订单交给 `build_rep
 #### 案例推进：严格输入只到达一次业务函数
 
 先声明依赖：`uv add "fastapi>=0.115,<1"`。把下面保存为 `order_service/main.py`。
+
+这是 `framework-example`：只做语法检查，本次不启动 FastAPI，也不访问示例域名。它依赖项目环境和 HTTPX，不能当作已运行的接口证据。
 
 ```python
 # framework-example: F15
@@ -113,7 +198,7 @@ def create_report(body: ReportIn, builder=Depends(get_report_builder)):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 def get_http_client(request: Request):
-    return request.state.http_client
+    return request.app.state.http_client
 @app.get("/external-report", response_model=ReportOut)
 async def external_report(client=Depends(get_http_client)):
     try:
@@ -124,11 +209,13 @@ async def external_report(client=Depends(get_http_client)):
         raise HTTPException(status_code=502, detail="上游订单服务不可用") from exc
 ```
 
-客户端只创建一次并跨请求复用；`async with` 保证应用退出时关闭。生产环境要把 base URL 放入配置，并在入口注入，而不是固定在代码里。
+客户端只创建一次并跨请求复用；`async with` 保证应用退出时关闭。lifespan 把客户端挂在 `app.state`，请求侧经 `request.app.state` 读取；`request.state` 是每请求独立的命名空间，不会自动带上应用级对象。生产环境要把 base URL 放入配置，并在入口注入，而不是固定在代码里。
 
 ### 4.3 用 TestClient 走完整接口路径
 
 #### 案例推进：分别验证成功、拒绝和清理
+
+这是 `framework-example`：本次不启动 TestClient，只检查语法；它需要 FastAPI、HTTPX 与第12–14章模块，且不会访问真实订单服务。
 
 ```python
 # framework-example: F15B
@@ -158,7 +245,7 @@ with TestClient(app) as client:
                 {"orders": [{"id": "A", "user": "Alice", "amount_cents": -1, "status": "paid"}]},
                 {"orders": [], "tenant_id": "b"}):
         assert client.post("/reports", json=bad).status_code == 422
-    assert calls == []
+    assert calls == [1]  # id=" " 形状合法，进入业务后被空白校验拒绝，计数一次
     conflict = client.post("/reports", json={"orders": [body["orders"][0],
         {"id": "A", "user": "Alice", "amount_cents": 1991, "status": "paid"}]})
     assert conflict.status_code == 409
@@ -166,16 +253,16 @@ app.dependency_overrides.clear()
 assert shared.is_closed
 ```
 
-`TestClient` 经过真实路由、模型验证、依赖和响应映射，并触发 lifespan；它仍不验证真实网络、反向代理和部署配置。上游 502 分支应在 `tests/test_api.py` 中通过依赖替身覆盖。
+`TestClient` 经过真实路由、模型验证、依赖和响应映射，并触发 lifespan；它仍不验证真实网络、反向代理和部署配置。上游 502 分支应在 `tests/test_api.py` 中通过依赖替身覆盖。`F15B` 的预期状态序列是 200、五个 422、一个 409；业务调用次数在合法请求后为 1。五个 422 中，字符串金额、布尔金额、负金额和额外字段四个是形状非法，模型在业务前拒绝，不产生调用；`id=" "` 长度为 1，通过 `min_length=1`，形状合法但业务去空白后拒绝并映射为 422，因此循环结束后计数是 1 而不是 0。退出上下文后 `shared.is_closed` 为真。
 覆盖 502 时替换 `get_http_client`，让适配器抛出受控 `UpstreamError`，断言响应为 502 且正文不含内部异常。这样测试的是错误映射，不是 mock 掉订单报告计算。
 
-接口证据还要区分层次：请求 `GET /openapi.json`，确认路径、请求体和 `ReportOut` 已声明，接入认证后再核验 security scheme；422 断言错误位置指向请求字段且业务未调用；409 必须来自形状合法但冲突的业务数据；502 来自受控上游失败且正文已脱敏。OpenAPI 能证明契约被声明，不能单独证明运行时授权或部署可用。
+接口证据还要区分层次：请求 `GET /openapi.json`，确认路径、请求体和 `ReportOut` 已声明，接入认证后再核验 security scheme；422 要区分来源，模型拒绝的错误位置指向请求字段且业务未调用，业务拒绝形状合法输入时携带业务错误信息；409 必须来自形状合法但冲突的业务数据；502 来自受控上游失败且正文已脱敏。OpenAPI 能证明契约被声明，不能单独证明运行时授权或部署可用。
 
 ## 5. 动手练习
 
 ### 本章累计任务：把同一订单业务接成服务
 
-完成 `/reports` 与 `/external-report`，复用第12–14章函数。用 TestClient 覆盖 200、422、409、502，记录非法输入时业务未执行；用替身验证上游失败，并断言 lifespan 退出后共享客户端关闭。记录启动命令，并明确本练习的身份方案不能直接作为生产认证。
+完成 `/reports` 与 `/external-report`，复用第12–14章函数。用 TestClient 覆盖 200、422、409、502，记录形状非法输入时业务未执行、空白字符串由业务拒绝仍返回 422；用替身验证上游失败，并断言 lifespan 退出后共享客户端关闭。记录启动命令，并明确本练习的身份方案不能直接作为生产认证。
 
 ## 6. 验收与自测
 
@@ -191,6 +278,14 @@ assert shared.is_closed
 模型只证明数据形状合法，身份与对象权限必须由服务端检查。共享客户端由应用级所有者关闭，请求退出不能破坏其他请求正在使用的连接池。
 
 </details>
+
+### 6.2 用操作、预期结果与证据验收
+
+| 操作 | 预期结果 | 证据 |
+| --- | --- | --- |
+| 发送合法、严格输入失败与同 ID 冲突 | 分别得到 200、422、409，形状非法不调用业务，空白字符串由业务拒绝 | 状态码、错误位置与业务调用计数 |
+| 注入受控 `UpstreamError` | `/external-report` 返回脱敏 502 | 响应正文不含内部异常 |
+| 进入并退出 TestClient 上下文 | lifespan 创建一次客户端，退出后关闭 | `app.state.http_client.is_closed` |
 
 ## 7. 面试问答与迁移
 

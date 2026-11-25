@@ -55,7 +55,9 @@ export function createBff(options: {
         } catch (error) {
           if (error instanceof RequestCancelled) return;
           const message = error instanceof UpstreamFailure ? error.message : "模型流暂不可用";
-          write({ type: "error", message, retryable: error instanceof UpstreamFailure && error.status !== 401 });
+          const retryable = error instanceof UpstreamFailure
+            && (error.status === 429 || error.status >= 500);
+          write({ type: "error", message, retryable });
         } finally {
           if (!closed) { closed = true; controller.close(); }
         }

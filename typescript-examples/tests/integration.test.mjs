@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createBff } from "../dist/bff.js";
 import { forwardSearch, RequestCancelled, UpstreamFailure } from "../dist/transport.js";
 import { createDocumentStore } from "../dist/documents.js";
-import { parseSearchResponse } from "../dist/search-contract.js";
+import { parseSearchHits, parseSearchResponse } from "../dist/search-contract.js";
 
 const requestBody = { question: "预付款", as_of: "2026-01-01" };
 const raw = { source_id: "policy-a", version: "1", title: "付款制度", text: "😀制度：预付款20%。",
@@ -64,6 +64,20 @@ test("Python两份HTTP响应夹具都通过适配，缺字段不静默默认", a
     const broken = structuredClone(fixture); delete broken.items[0].text;
     assert.throws(() => parseSearchResponse(broken, mode));
   }
+});
+test("浏览器BFF契约逐项校验，坏location与稀疏数组不能绕过", () => {
+  const hit = { sourceId: "policy-a", version: "1", title: "付款制度", quote: "😀制度",
+    location: { kind: "chunk", chunkId: "chunk-1", start: 0, end: 3 } };
+  assert.deepEqual(parseSearchHits({ items: [hit] }), [hit]);
+  for (const value of [null, {}, { items: new Array(1) },
+    { items: [{ ...hit, title: "" }] },
+    { items: [{ ...hit, location: { kind: "unknown" } }] },
+    { items: [{ ...hit, location: { ...hit.location, end: 2 } }] }]) {
+    assert.throws(() => parseSearchHits(value));
+  }
+  const persistent = { ...hit, quote: "制度",
+    location: { kind: "source", section: "第1条" } };
+  assert.deepEqual(parseSearchHits({ items: [persistent] }), [persistent]);
 });
 test("SQLite+Drizzle半开日期、租户隔离、重复与冲突", async () => {
   const store = await createDocumentStore();

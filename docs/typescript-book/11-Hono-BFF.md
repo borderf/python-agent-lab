@@ -85,11 +85,65 @@ parseSearchBody只接受question/as_of，按Unicode码点限制2–1000字符，
 
 定时器覆盖收到响应头与读取JSON的整个过程，finally清理。取消来源来自各自signal的状态，而非异常名称；测试分别注入客户端取消、预算到期和普通网络错误。传入的底层fetch仍需响应signal，这不是任意代码的强制终止器。
 
-### 2.7 SSE透传是后续明确的集成任务
+### 2.7 SSE透传与当前模型演示的边界
 
-当前createBff实现/api/search；当前Python服务也没有/api/chat/stream。先运行第6章的受控流测试，再增加真实流式上游。透传需先验证状态和text/event-stream，直接交付upstream.body，并处理客户端断开、截止时间、代理缓冲与流结束指标。
+当前 `createBff` 实现 `/api/search`，另有独立 `/api/answer`：它把 Ollama NDJSON 映射为应用 SSE（第6章），不是通用上游 SSE 透传，也不包含 RAG。Python 检索服务当前仍返回一次性 JSON。
 
-不能先response.text()再声称流式；不能强行把任何上游JSON标成event-stream。SSE透传、真实Cookie会话和上游模型取消要分别留下集成证据，不由搜索测试通过推断。
+通用透传仍需先验证状态和 `text/event-stream`，直接交付 `upstream.body`，并处理客户端断开、截止时间、代理缓冲与流结束指标。不能先 `response.text()` 再声称流式，也不能强行把任意上游 JSON 标成 `event-stream`。真实 Cookie 会话与供应商取消要分别留下集成证据，不能由搜索或假上游测试推断。
+
+### 2.8 搜索请求：从浏览器输入到BFF输出
+
+当前 `/api/search` 的完整契约如下。请求体只允许两个字段，`tenant_id`不是“可选的租户参数”，多出来就拒绝。
+
+```text
+POST /api/search
+Authorization: Bearer demo
+Content-Type: application/json
+
+{"question":"预付款","as_of":"2026-01-01"}
+```
+
+认证通过后，BFF把浏览器token换成Actor中的upstreamToken，再把规范化的question/as_of转发到`${upstreamUrl}/api/search`。前端不能直接看到或填写这个上游token。core模式收到Python的snake_case响应后，输出camelCase：
+
+```text
+HTTP 200
+X-Request-ID: <uuid>
+Content-Type: application/json
+
+{"items":[{"sourceId":"policy-a","version":"1","title":"付款制度",
+"quote":"预付款20%。","location":{"kind":"chunk","chunkId":"chunk-1","start":0,"end":7}}]}
+```
+
+这里`end=7`必须等于引文的Unicode码点数；persistent模式输出`location.kind="source"`和section。两种location由创建BFF时的mode选择，不能从同一份字段里猜。缺title、quote或偏移都会变成502 `invalid_response`，不是补默认值。
+
+### 2.9 错误映射表：先区分发生在哪一层
+
+| 发生位置/原因 | HTTP或流内结果 | 稳定code/字段 | 是否继续调用上游 |
+| --- | --- | --- | --- |
+| 缺少或无效Bearer | 401 | `unauthorized` | 否 |
+| 坏JSON | 422 | `invalid_json` | 否 |
+| 多tenant_id、坏日期、问题长度越界 | 422 | `invalid_input` | 否 |
+| 上游返回401/403/404/422/429 | 保留该状态 | `upstream_401`等 | 已返回，取消body |
+| 上游其他非2xx | 502 | `upstream_502` | 已返回，取消body |
+| 连接失败或JSON读取失败 | 502 | `upstream_failure` | 否/已中断 |
+| BFF预算到期 | 504 | `upstream_timeout` | signal取消上游 |
+| Python字段不符合mode | 502 | `invalid_response` | 已结束 |
+| `/api/answer`未配置模型 | 503 | `model_unconfigured` | 否 |
+| 流已200开始后供应商失败 | HTTP仍200，SSE error | message/retryable | 已取消reader |
+| 客户端取消 | 本地分类499；真实断开通常无法送达 | 无用户错误体 | 取消上游 |
+
+普通错误体固定为`{"error":{"code":"...","message":"...","requestId":"..."}}`。前端按code和status分支，不解析上游异常文本；requestId用于把用户报告关联到服务端日志。
+
+### 2.10 `/api/answer`的输入、输出与调用边界
+
+该端点只接受`{"question":"预付款"}`，问题trim后按码点计2–1000字符。BFF把Ollama `/api/chat`的NDJSON逐行映射成应用SSE：text变token，tool_calls变tool，正常stop变done，length/unknown/断流变error。done的answerId使用BFF requestId，needsReview固定true；它没有RAG引用。
+
+```text
+成功事件顺序：event: token … →（可选event: tool …）→ event: done …
+失败事件顺序：event: token … → event: error … → 关闭响应
+```
+
+**重要边界：** 第10章`AnswerPage`默认发送`{question, as_of}`，比当前端点允许的字段多一个as_of；直接接入会得到422 `invalid_input`。接到当前 `/api/answer` 时应只发送`{question}`，像`host-client.tsx`那样；若要保留业务日期，必须先明确扩展服务端协议。不能把第10章组件直接接到本端点后声称已经兼容。
 
 ## 3. 原理讲解与推导
 
@@ -99,11 +153,26 @@ parseSearchBody只接受question/as_of，按Unicode码点限制2–1000字符，
 
 ### 3.2 错误映射要稳定
 
-前端不应解析 Python 的异常文本。BFF 把上游错误归类为 `unauthorized/forbidden/not_found/invalid_input/upstream_timeout/upstream_error`，前端按 code 分支。上游新增错误时，BFF 映射表要更新并测试。
+前端不应解析 Python 的异常文本。BFF 的稳定 code 见 2.9 表：入口层 `unauthorized/invalid_json/invalid_input`，上游状态 `upstream_401/upstream_403/upstream_404/upstream_422/upstream_429/upstream_502`，连接或响应不合法 `upstream_failure`，预算到期 `upstream_timeout`，字段不合 mode `invalid_response`。前端按 code 和 status 分支；上游新增错误时，映射表要更新并测试。
 
 ### 3.3 超时是预算，不是单个数字
 
 一次请求可能经过浏览器 → BFF → Python → 模型。每层都要有超时，且总预算递减；各层应共享截止时间并为返回留余量。例如浏览器15秒、BFF14秒、内部工作13秒是规划示意，不是三个彼此独立的保证；上游工作必须在外层截止前留出返回时间。超时后要取消耗时工作，而不是只返回 504。
+
+### 3.4 当前计时与取消究竟覆盖到哪
+
+`forwardSearch`在调用fetch前创建deadline，`AbortSignal.any([clientSignal, deadline.signal])`同时监听浏览器取消和预算到期。定时器一直保留到`response.json()`完成，因此不只覆盖响应头；但认证查询、Hono读取/校验JSON发生在forwardSearch之前，不在这段计时内。若把“15秒”理解成完整端到端保证，就会漏掉这些前置耗时。
+
+`streamOllama`的deadline覆盖从调用供应商到NDJSON流结束；`/api/answer`把客户端signal与流cancel signal合并。Node入口在请求aborted或响应close且未正常结束时abort，pipeline再把下游取消传回Response.body。这里取消的是本地fetch/reader；不能据此断言供应商已停止推理或计费。
+
+| 信号来源 | 识别方式 | 搜索路径结果 | 流路径结果 |
+| --- | --- | --- | --- |
+| 浏览器/Node入口断开 | `clientSignal.aborted` | RequestCancelled，本地映射499 | 停止写入并关闭，通常无法再发HTTP错误 |
+| BFF deadline | `deadline.signal.aborted`且客户端未取消 | 504 `upstream_timeout` | SSE error，retryable=true |
+| 上游主动AbortError | 两个signal都未abort | 502 `upstream_failure` | 视具体错误映射，不能误报504 |
+| 正常done/error | 协议终止事件 | 不适用 | 终止读取并取消剩余reader |
+
+catch中先判断客户端、再判断deadline，是因为一次取消可能同时触发两者；顺序决定错误分类。HTTP头一旦以200发出，后续超时只能通过SSE error表达，不能把状态改成504。
 
 ## 4. 示例与逐步走查
 
@@ -115,11 +184,24 @@ authenticate、上游地址、响应模式和fetch边界可注入，测试只替
 
 [search-contract.ts](../../typescript-examples/src/search-contract.ts)负责把snake_case转换为界面模型，缺字段报502，不用as跳过。测试同时检查无身份拒绝、合法身份成功、伪造租户、非法日期、上游状态、超时及响应字段。
 
+### 4.1 沿请求记录逐段核对
+
+| 阶段 | 输入 | 预期输出/副作用 | 应保留的证据 |
+| --- | --- | --- | --- |
+| requestId中间件 | 任意请求 | 响应头X-Request-ID，后续错误体也带它 | 401响应中的requestId |
+| authenticate | Authorization头 | Actor或null；不读取body.tenantId | 无身份时上游fetcher调用数为0 |
+| parseSearchBody | unknown JSON | `{question, as_of}`或422 | 2026-02-30与额外tenant_id均拒绝 |
+| forwardSearch | Actor.upstreamToken、signal | Python JSON或分类失败 | 上游收到服务端token，body不含tenant_id |
+| parseSearchResponse | unknown、mode | `{items: SearchHit[]}`或502 | 删除text/offset后失败 |
+| SSE映射 | Ollama NDJSON | token/tool/done或error | 提前EOF不发done；客户端取消不继续enqueue |
+
+这张表也是排障顺序：先看有没有requestId，再看认证/校验是否阻止转发，然后看上游状态，最后看映射。不要一遇到500就改模型提示词。
+
 ## 5. 练习
 
 ### 练习一：跟写
 
-给 `/api/search` 增加总超时 10 秒；客户端断开或超时都中止上游，返回 `504`/`499`，并记录耗时。
+`timeoutMs`已经注入`createBff`，不要重复实现一套定时器。先读`forwardSearch`，把测试预算改为10秒并用可控时钟/假上游验证：客户端断开与预算到期分别分类，读取body超时也中止。再说明为什么认证和JSON解析时间不在当前deadline内；若要覆盖完整请求，应把计时边界移到中间件入口并保留返回余量。
 
 ### 练习二：改造
 
@@ -131,9 +213,22 @@ authenticate、上游地址、响应模式和fetch边界可注入，测试只替
 
 ## 6. 验收与自测
 
-**行为验收：** 搜索路径的无身份401、合法请求200、伪造租户422、预算超时504与取消区分均由集成测试检查。真实连接断开传播、Cookie会话与SSE透传属于后续任务，完成后另补运行记录。
+**行为验收：** 搜索路径的无身份401、合法请求200、伪造租户422、预算超时504与取消区分均由集成测试检查；本地真实HTTP的下游取消也有`real-http-stream.test.mjs`证据。供应商停止生成/计费、Cookie会话与通用SSE透传仍是后续边界，不能由本地取消测试推断。
 
 **原理验收：** 能解释 BFF 与业务服务的职责边界、信任边界、超时预算和错误映射；能说出为什么不能只信前端传的租户。
+
+| 操作 | 预期 | 证据位置/断言 |
+| --- | --- | --- |
+| 不带Authorization调用`/api/search` | 401 unauthorized，带requestId | `integration.test.mjs`无身份用例 |
+| 带合法身份和合法body | 200，上游收到server-token，输出camelCase | 合法搜索用例检查init.headers/body |
+| body加入tenant_id或2026-02-30 | 422 invalid_input，不调用上游 | 伪造租户/坏日期用例 |
+| 假上游等待abort，预算5ms | 504 upstream_timeout | 总时限用例 |
+| 客户端先abort，上游也等待同一signal | RequestCancelled，不误判504 | 客户端取消与预算分开用例 |
+| 删除Python夹具text或改错偏移 | 502 invalid_response/解析失败 | 两份夹具适配与坏location用例 |
+| `/api/answer`提前EOF或length | HTTP200内出现error，不出现done | `answer-stream.test.mjs`结束原因用例 |
+| 本地HTTP客户端取消reader | BFF取消上游连接，不继续写 | `real-http-stream.test.mjs`下游停止读取用例 |
+
+表中是现有断言的定位，不是本次编辑重新运行测试的结论。新增供应商取消、公网链路或Cookie会话必须保留各自运行记录。
 
 ### 6.1 先预测，再查看解释
 
@@ -174,21 +269,17 @@ Gateway 偏通用流量治理（路由、限流、TLS），BFF 偏某一客户�
 → 稳定错误码、requestId 或 SSE 流
 ```
 
-**三个关键词：** 信任边界、可信身份、稳定错误码。边界决定谁能进来，身份决定以谁的名义转发，错误码让前端不必解析上游文本。
+**三个关键词：** 信任边界、可信身份、稳定错误码。身份来自凭据，字段经过运行时校验，错误按来源映射；流开始后错误改走SSE。
 
 **最容易错：**
-- 从请求体读 `tenant_id` 或直接信前端 header；身份必须来自已验证凭据，上游还要再校验一次。
-- 把超时当单个数字，不设计逐层递减预算；超时只回 504 却不取消上游，或凭 `AbortError` 名字判断超时。
-- 先 `response.text()` 再声称 SSE 透传，或把任意上游 JSON 标成 `event-stream`。
-- 把检索、审批、提示词版本搬进 BFF，制造两套业务规则。
+- 从body/前端header取租户；把mode两种响应当成同一契约。
+- 把上游AbortError当成本层超时；只取消本地Promise不取消fetch/reader。
+- 认为deadline覆盖认证和解析；流头200后还想改写HTTP状态。
+- 把Ollama协议演示当RAG/通用SSE透传，或忽略`AnswerPage`双字段与当前端点的差异。
 
-**与前后章：** 第 10 章的流式 UI 提供 endpoint 与事件契约；第 12 章需要把这里转发的搜索和写操作落到业务键、事务与冲突策略。
+**与前后章：** 第10章定义前端事件与终态；第12章的持久化承接BFF校验后的可信身份和业务键。
 
-**学完应能：**
-- 能搭出 requestId→认证→校验→转发→错误映射的 Hono 应用，并用 `app.request` 覆盖 401、成功、伪造租户、504。
-- 能说明 BFF 与业务服务的职责边界及纵深防御。
-- 能区分客户端取消、本层预算到期与上游故障，并让取消传到上游。
-- 能列出 SSE 透传的前置条件与当前未完成的集成证据。
+**学完应能：** 按一次请求列出输入、输出、调用边界和401/422/502/504证据；区分搜索JSON、模型SSE、通用透传三种尚未相同的协议。
 
 ### 8.2 参考与后续学习
 

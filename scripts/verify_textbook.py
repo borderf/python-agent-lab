@@ -37,6 +37,22 @@ def anchors(text: str) -> set[str]:
     return result
 
 
+def details_boundary_errors(text: str) -> list[str]:
+    lines = text.splitlines()
+    errors = []
+    for index, line in enumerate(lines):
+        marker = line.strip()
+        previous = lines[index - 1].strip() if index else ""
+        following = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if marker == "<details>" and previous:
+            errors.append(f"line {index + 1}: blank line required before <details>")
+        if "<summary>" in marker and following:
+            errors.append(f"line {index + 1}: blank line required after <summary>")
+        if marker == "</details>" and following:
+            errors.append(f"line {index + 1}: blank line required after </details>")
+    return errors
+
+
 def verify(static_only: bool) -> dict:
     failures: list[str] = []
     chapters = sorted(p for p in BOOK.glob("[0-9][0-9]-*.md") if not p.name.startswith("00-"))
@@ -69,6 +85,7 @@ def verify(static_only: bool) -> dict:
             failures.append(f"{path.name}: missing or duplicate cumulative task")
         if text.count("<details>") != 1 or text.count("</details>") != 1:
             failures.append(f"{path.name}: missing or duplicate self-check")
+        failures.extend(f"{path.name}: {error}" for error in details_boundary_errors(text))
         if len(re.findall(r"^#### 案例推进：", text, re.M)) < 3:
             failures.append(f"{path.name}: incomplete worked learning sequence")
         numbers = re.findall(r"^### (\d+\.\d+) ", text, re.M)
@@ -154,8 +171,10 @@ def verify(static_only: bool) -> dict:
                 os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             for label, code in runnable:
                 try:
+                    # S25C 跨进程导入 LangGraph/SQLite checkpointer，冷启动可能超过普通示例的 20 秒。
+                    timeout = 60 if label.endswith(":S25C") else 20
                     result = subprocess.run([sys.executable, "-X", "utf8", "-c", code], cwd=directory,
-                                            capture_output=True, text=True, encoding="utf-8", timeout=20,
+                                            capture_output=True, text=True, encoding="utf-8", timeout=timeout,
                                             env=env)
                     if result.returncode:
                         failures.append(f"{label}: {result.stderr[-1400:]}")

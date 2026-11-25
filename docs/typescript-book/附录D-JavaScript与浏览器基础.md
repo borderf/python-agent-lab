@@ -30,7 +30,7 @@ function makeLimit(maxCents) {
 
 const small = makeLimit(10000);
 const large = makeLimit(100000);
-console.log(small(20000), large(20000)); // true false
+console.log(small(20000), large(20000)); // false true
 ```
 
 `small` 和 `large` 各自保留 `maxCents` 的绑定。和 Python 闭包一样：捕获的是绑定/cell，不是值快照；不要用“函数返回后变量就没了”解释。
@@ -149,6 +149,8 @@ form.addEventListener("submit", async event => {
 React 把页面描述成“状态 → UI”：
 
 ```tsx
+import { useState } from "react";
+
 function SearchBox({ onSearch }: { onSearch: (q: string) => void }) {
   const [draft, setDraft] = useState("");
   return <form onSubmit={e => { e.preventDefault(); if (draft.trim()) onSearch(draft.trim()); }}>

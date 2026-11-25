@@ -52,7 +52,9 @@ export async function streamOllama(config: OllamaConfig, body: AnswerBody,
     });
     if (!response.ok) {
       await response.body?.cancel();
-      throw new UpstreamFailure(502, "upstream_stream_rejected", "供应商拒绝了流式请求");
+      const statuses = [401, 403, 404, 422, 429] as const;
+      const status = statuses.find(value => value === response.status) ?? 502;
+      throw new UpstreamFailure(status, "upstream_stream_rejected", "供应商拒绝了流式请求");
     }
     if (!response.body) throw new UpstreamFailure(502, "upstream_stream_empty", "供应商没有返回流");
     reader = response.body.getReader();

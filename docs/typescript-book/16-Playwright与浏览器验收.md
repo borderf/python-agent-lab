@@ -31,9 +31,10 @@ import { test, expect } from "@playwright/test";
 
 test("搜索并打开引用", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("问题").fill("预付款");
-  await page.getByLabel("业务日期").fill("2026-07-01");
-  await page.getByRole("button", { name: "搜索" }).click();
+  const search = page.getByRole("region", { name: "文档搜索" });
+  await search.getByLabel("问题").fill("预付款");
+  await search.getByLabel("业务日期").fill("2026-07-01");
+  await search.getByRole("button", { name: "搜索" }).click();
   await expect(page.getByRole("list", { name: "搜索结果" })).toBeVisible();
   await page.getByRole("button", { name: "打开来源 policy-a" }).click();
   await expect(page.getByRole("heading", { name: /付款制度/ })).toBeVisible();
@@ -75,9 +76,10 @@ test("空结果有明确提示", async ({ page }) => {
     body: JSON.stringify({ items: [] }),
   }));
   await page.goto("/");
-  await page.getByLabel("问题").fill("不存在的条款");
-  await page.getByLabel("业务日期").fill("2026-07-01");
-  await page.getByRole("button", { name: "搜索" }).click();
+  const search = page.getByRole("region", { name: "文档搜索" });
+  await search.getByLabel("问题").fill("不存在的条款");
+  await search.getByLabel("业务日期").fill("2026-07-01");
+  await search.getByRole("button", { name: "搜索" }).click();
   await expect(page.getByText("没有找到相关条款")).toBeVisible();
 });
 ```
@@ -89,8 +91,9 @@ E2E 用网络替身测 UI 状态，不依赖真实模型/数据库；真实集�
 ### 2.5 等待状态，不要等待时间
 
 ```ts
-await expect(page.getByRole("status")).toHaveText("搜索中…");
-await expect(page.getByRole("status")).toBeHidden();
+const searchStatus = page.getByRole("status", { name: "搜索状态" });
+await expect(searchStatus).toHaveText("搜索中…");
+await expect(searchStatus).toBeHidden();
 await expect(page.getByText("预付款比例不得超过20%")).toBeVisible();
 ```
 
@@ -128,6 +131,44 @@ pnpm exec playwright test
 - 测试数据用工厂/固定 ID，避免“第 1 条”这种位置依赖；
 - 对不稳定用例先修根因，不要加大超时掩盖。
 
+### 2.8 最小配置的输入输出边界
+
+Playwright尚未安装；接入时先锁定依赖，再建立配置。最小配置应明确：
+
+| 配置项 | 本章建议 | 原因 |
+| --- | --- | --- |
+| testDir | `e2e` | 与当前Node `tests/*.test.mjs`分开 |
+| baseURL | `http://127.0.0.1:8787` | 与`pnpm serve`默认端口一致 |
+| webServer命令 | 先`pnpm build`再`pnpm serve` | 当前服务读dist与host/app.js |
+| reuseExistingServer | 本地可复用，CI关闭 | 避免误连旧服务 |
+| trace/video/screenshot | 失败保留 | 提供可诊断证据 |
+| projects | 先Chromium桌面，再补移动视口 | 先跑通主路径，不一次铺满 |
+
+端口可用环境变量替换，但配置与实际服务必须一致。当前`pnpm start`运行离线`dist/main.js`，不是Web服务器；把它填进webServer会出现连接拒绝。
+
+### 2.9 网络替身、真实冒烟与时序测试的分工
+
+| 方式 | 能证明 | 不能证明 |
+| --- | --- | --- |
+| `route.fulfill`固定JSON | 空态、错误提示、字段渲染、按钮交互 | BFF/Python/数据库协作 |
+| 本地真实BFF+Python | HTTP契约、身份、持久化切片 | 公网模型、所有浏览器布局 |
+| 假SSE完整body | token/citation/done的最终状态 | token是否逐步到达、50ms批量 |
+| 真实/受控流服务 | 流传输、停止、断连 | 供应商计费是否停止 |
+| 单元/组件测试 | 精确的迟到、buffer、reducer顺序 | 键盘、焦点、视口遮挡 |
+
+`route.fulfill`适合一次响应；若要验证“第一个token先出现、done后状态变化”，需要能分块发送的测试服务，而不是把完整SSE字符串一次返回。此类服务目前未提供，不能把完整body测试写成流式时序已通过。
+
+### 2.10 常见失败与定位顺序
+
+| 现象 | 优先检查 | 不应怎么做 |
+| --- | --- | --- |
+| 页面连接拒绝 | build是否成功、serve是否启动、端口/baseURL | 只加大test超时 |
+| 搜索按钮无反应 | 是否重复点击被禁用、请求是否发出、alert文本 | 直接改选择器绕过语义 |
+| 结果列表等不到 | 路由URL/method、BFF响应字段、网络状态 | 用`waitForTimeout`赌完成 |
+| 来源点击后无标题 | 当前是页内SourcePanel，不是独立路由 | 断言不存在的`/sources/:id` |
+| 流式停止后文字消失 | stop是否flush、runner是否迟到、aria状态 | 只检查abort次数 |
+| CI偶发失败 | trace、共享Cookie/数据库、未等待Promise | 重跑直到绿或统一加30秒 |
+
 ## 3. 原理讲解与推导
 
 ### 3.1 E2E 证明“集成后仍可用”
@@ -141,6 +182,12 @@ pnpm exec playwright test
 ### 3.3 测试环境要可控
 
 E2E 依赖服务、数据库、模型。用固定 fixture/替身控制输入；真实模型只做单独冒烟，不进入每次 PR，否则测试慢且不确定。
+
+### 3.4 等待的本质是建立“条件已满足”的证据
+
+`expect(locator).toBeVisible()`会重试读取同一个可观察条件，直到成立或超时；它比“睡3秒”更早继续，也更晚才失败。`page.waitForResponse`匹配具体URL/方法，若在click之后才注册，快速响应可能已经发生。需要响应内容时，应先创建等待Promise，再执行点击，最后await并检查状态/body。
+
+自动重试只解决“何时观察到”，不修复重复提交、错误路由或闪屏。若loading态只存在20ms，主路径不应强制等待它；专门测loading时，用受控延迟保持该状态，并同时验证按钮禁用和最终结果。
 
 ## 4. 示例与逐步走查
 
@@ -162,9 +209,10 @@ test.describe("搜索主路径", () => {
     }));
 
     await page.goto("/");
-    await page.getByLabel("问题").fill("预付款");
-    await page.getByLabel("业务日期").fill("2026-07-01");
-    await page.getByRole("button", { name: "搜索" }).click();
+    const search = page.getByRole("region", { name: "文档搜索" });
+    await search.getByLabel("问题").fill("预付款");
+    await search.getByLabel("业务日期").fill("2026-07-01");
+    await search.getByRole("button", { name: "搜索" }).click();
 
     const results = page.getByRole("list", { name: "搜索结果" });
     await expect(results).toBeVisible();
@@ -182,6 +230,18 @@ test.describe("搜索主路径", () => {
 3. 定位用角色/名称，界面语义变化会明确失败；
 4. 断言用户可见结果，不断言内部 state；
 5. 真实服务冒烟另设项目/环境变量，不在每次 PR 跑。
+
+### 4.1 当前宿主页哪些断言有真实落点
+
+| 页面元素 | 当前实现 | 可写断言 | 不能推断 |
+| --- | --- | --- | --- |
+| 搜索表单 | SearchPage，业务日期输入 | 点击后出现命名“搜索结果”列表 | 已通过真实键盘/移动端验收 |
+| 来源摘要 | SourcePanel显示title/version/quote/location | 点击“打开来源 policy-a”后标题“付款制度”可见 | 已有独立原文路由或再次授权 |
+| 流式回答 | AnswerPanel按钮名“开始回答” | token文本、停止后保留、error alert | 第10章AnswerPage双字段已兼容 |
+| 健康检查 | `GET /health`返回`{status:"ok"}` | 服务可启动 | 已有`/ready`或生产依赖就绪 |
+| 登录 | 固定教学Bearer demo | 未认证API返回401 | 已有/login或Cookie会话 |
+
+当前AnswerPanel只发送question；若测试第10章AnswerPage，需要先调整它的body或扩展端点。`article aria-live="polite"`会随流更新，是否过度播报必须用真实读屏/浏览器检查，不能由jsdom测试推断。
 
 ## 5. 练习
 
@@ -202,6 +262,19 @@ test.describe("搜索主路径", () => {
 **行为验收目标：** 完成宿主页与Playwright配置后，主路径在CI稳定通过，失败有trace，键盘可完成搜索/停止，错误/空状态可见，移动端关键按钮不被遮挡。当前jsdom检查不算这些目标已经完成。
 
 **原理验收：** 能解释 E2E 的边界、角色选择器的价值、网络替身与真实冒烟的分工；能说出一个 flaky 测试的根因。
+
+| 操作 | 预期 | 证据 |
+| --- | --- | --- |
+| 填问题/日期，点击“搜索” | 命名结果列表与引文可见 | E2E截图/断言/trace |
+| 点击“打开来源 policy-a” | 页内来源摘要标题可见 | 同一测试的后续断言 |
+| 路由返回空items | 明确空态，不是加载永久转圈 | 空结果E2E |
+| 路由返回502错误体 | `role="alert"`与重试入口可见 | 失败E2E |
+| 点击“开始回答”后停止 | 已到文本保留，停止状态可见 | 受控SSE服务E2E |
+| 仅用Tab/Enter完成搜索与停止 | 焦点可见，关键按钮可达 | 键盘路径记录 |
+| 移动视口打开回答面板 | 停止按钮不被遮挡 | 视口截图/边界检查 |
+| axe扫描 | 无新增serious/critical；人工问题另记 | axe JSON与手工检查 |
+
+当前没有Playwright依赖、配置或运行记录，以上全部是实施后的验收目标。现有`react.test.mjs`只能作为Hook回归证据。
 
 ### 6.1 先预测，再查看解释
 
@@ -242,21 +315,17 @@ test.describe("搜索主路径", () => {
 → 稳定通过 + trace + 可访问性证据
 ```
 
-**三个关键词：** 主路径、语义定位、可观察状态。只挑少量关键路径，用角色与标签把界面语义变成契约，等待状态而不是时间。
+**三个关键词：** 主路径、语义定位、可观察状态。只测关键任务，用角色/标签对齐用户语义，等待真实状态并保留trace。
 
 **最容易错：**
-- 用 `waitForTimeout` 等结果，或用 `div > button:nth-child(2)` 定位，CI 变慢或样式一改就碎。
-- 把 `route.fulfill` 的一次性 body 当逐 token 时序验证；时序应留给单元/组件测试。
-- 把 `storageState` 提交仓库，或用空密码/伪造登录让测试跑起来。
-- 只跑成功路径，漏掉空状态、`role="alert"`、键盘和移动端；或把当前 jsdom 通过当成 E2E 已完成。
+- 固定sleep或脆弱CSS定位；把一次性SSE body当逐token时序。
+- 误用`pnpm start`当Web服务；把页内SourcePanel当独立来源路由。
+- 提交storageState、共享登录/数据库状态，或重跑直到绿掩盖竞态。
+- 只测成功路径；把jsdom/axe通过当键盘、读屏、移动端全部通过。
 
-**与前后章：** 第 15 章的契约与集成证据证明后端边界；第 17 章需要把浏览器请求、TTFT、错误率与成本接到同一 requestId 的观测上。
+**与前后章：** 第15章提供后端与契约证据；第17章把浏览器请求、TTFT、错误与成本关联到requestId。
 
-**学完应能：**
-- 能写“搜索→结果→打开引用”的 E2E，用 role/label 定位并断言用户可见结果。
-- 能用受控网络替身覆盖空结果与失败，并区分替身与真实服务冒烟。
-- 能复用登录态、保留 trace，并说明一个 flaky 用例的根因。
-- 能用 axe 与键盘路径做基本可访问性验收，并记录其局限。
+**学完应能：** 为搜索→来源→停止写最小E2E；说明替身/冒烟/时序分层；用trace和键盘路径诊断失败。
 
 ### 8.2 参考与后续学习
 
